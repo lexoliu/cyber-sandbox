@@ -4,7 +4,7 @@ use std::{
 };
 
 use anyhow::{Context as _, Result, bail};
-use cyber_sandbox_agents::{AgentIntegration, key_directory};
+use cyber_sandbox_agents::{AgentIntegration, key_directory, known_hosts_directory};
 use cyber_sandbox_image::SandboxLayout;
 use cyber_sandbox_runtime::{AppleContainer, Committed, ContainerName, HostBudget, RunState};
 
@@ -93,6 +93,19 @@ impl Host {
     #[must_use]
     pub fn key_directory(&self) -> PathBuf {
         key_directory(&self.home)
+    }
+
+    /// File the host key `id` presents is remembered in, with its directory in place.
+    ///
+    /// Created here rather than left to `ssh`, which writes the file but not the
+    /// directory holding it and would otherwise warn on every connection.
+    ///
+    /// # Errors
+    /// Fails when the directory cannot be created.
+    pub async fn known_hosts_of(&self, id: &str) -> Result<PathBuf> {
+        let path = known_hosts_directory(&self.home).join(id);
+        create_parent(&path).await?;
+        Ok(path)
     }
 
     /// Directory image build contexts are staged into.

@@ -84,8 +84,9 @@ pub async fn up(host: &Host, arguments: &cli::Up) -> Result<()> {
     // start rather than only on the first one: a sandbox that came back on a different
     // address would otherwise leave both agents dialling the machine that has it now.
     let agents = host.agents();
+    let known_hosts = host.known_hosts_of(&record.id).await?;
     agents
-        .register(&record.endpoint(address))
+        .register(&record.endpoint(address, known_hosts))
         .await
         .context("registering the sandbox with the host's agents")?;
 
@@ -312,9 +313,23 @@ pub async fn rm(host: &Host, arguments: &cli::Target) -> Result<()> {
         .await
         .context("unregistering the sandbox from the host's agents")?;
     SandboxKey::remove(&host.key_directory(), &arguments.id).await?;
+    forget_host_key(host, &arguments.id).await?;
     host.forget(&arguments.id).await?;
     tracing::info!(sandbox = arguments.id, "removed");
     Ok(())
+}
+
+/// Drops the record of the host key this sandbox presented.
+///
+/// The next sandbox to be handed its vmnet address must be free to present a different
+/// one, so the file goes when the machine does.
+async fn forget_host_key(host: &Host, id: &str) -> Result<()> {
+    let path = host.known_hosts_of(id).await?;
+    match tokio::fs::remove_file(&path).await {
+        Ok(()) => Ok(()),
+        Err(source) if source.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(source) => Err(source).with_context(|| format!("removing {}", path.display())),
+    }
 }
 
 /// One row of `ls`.

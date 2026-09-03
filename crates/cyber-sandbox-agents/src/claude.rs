@@ -174,6 +174,7 @@ mod tests {
             host: "192.168.64.7".to_owned(),
             port: 22,
             identity_file: PathBuf::from("/keys/id_ed25519"),
+            known_hosts: PathBuf::from("/keys/known_hosts"),
             start_directory: PathBuf::from("/work"),
         }
     }
