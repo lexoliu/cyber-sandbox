@@ -1,0 +1,12 @@
+[workspace]
+# Every crate moves together: the CLI, the image it renders and the gateway that image
+# runs are one artefact, and a sandbox built from mismatched halves is not auditable.
+dependencies_update = false
+git_release_enable = true
+pr_labels = ["release"]
+
+[[package]]
+name = "cyber-sandbox-gateway"
+# The gateway only builds for Linux, so it is published from the release job rather than
+# verified on the macOS host that publishes everything else.
+publish_no_verify = true

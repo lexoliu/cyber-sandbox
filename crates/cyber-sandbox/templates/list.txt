@@ -1,0 +1,9 @@
+{%- if sandboxes.is_empty() %}
+No sandboxes yet. Create one with `cyber-sandbox up <name>`.
+{%- else %}
+{{ "NAME"|fmt("{:<20}") }}{{ "STATE"|fmt("{:<12}") }}{{ "ADDRESS"|fmt("{:<18}") }}{{ "ARCH"|fmt("{:<8}") }}IMAGE
+{% for sandbox in sandboxes -%}
+{{ sandbox.id|fmt("{:<20}") }}{{ sandbox.state|fmt("{:<12}") }}{{ sandbox.address|fmt("{:<18}") }}{{ sandbox.arch|fmt("{:<8}") }}{{ sandbox.image }}
+{% endfor -%}
+{%- endif %}
+

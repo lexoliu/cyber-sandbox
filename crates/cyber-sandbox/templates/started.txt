@@ -1,0 +1,22 @@
+
+{{ id }} is running.
+
+  address    {{ user }}@{{ address }}:{{ ssh_port }}
+  image      {{ image }} ({{ arch }})
+  samples    {{ samples }}
+  identity   {{ identity_file }}
+
+Both agents keep their credentials on this host and reach the sandbox over SSH, so
+nothing inside it ever holds a token.
+
+  claude     claude ssh {{ id }}
+  codex      /environment, then pick {{ id }}
+  shell      cyber-sandbox ssh {{ id }}
+
+Every packet the sandbox sends is audited or refused. Watch it with:
+
+  cyber-sandbox audit tail {{ id }} --follow
+
+Registered in {{ claude_settings }}
+          and {{ codex_environments }}
+
