@@ -57,13 +57,13 @@ pub enum RuntimeError {
     NoSuchContainer(ContainerName),
 
     /// The host cannot carry a workload the caller asked to start.
-    #[error("the host cannot run {workload}: it needs {needed}, but only {available} is available")]
+    #[error("the host cannot run {workload}: it needs {needed}, but {available}")]
     Budget {
         /// Workload that was refused.
         workload: &'static str,
         /// What the workload asked for.
         needed: String,
-        /// What the host actually has.
+        /// What the host actually has, phrased as a clause completing the message.
         available: String,
     },
 

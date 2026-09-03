@@ -182,7 +182,7 @@ impl HostBudget {
             return Err(RuntimeError::Budget {
                 workload: W::NAME,
                 needed: format!("{} GiB of free disk", W::DISK_FLOOR / GIB),
-                available: format!("{} MiB", self.free_disk / MIB),
+                available: format!("only {} MiB is free", self.free_disk / MIB),
             });
         }
         if cpus.get() + HOST_CPU_RESERVE > self.cpus {
@@ -190,20 +190,20 @@ impl HostBudget {
                 workload: W::NAME,
                 needed: format!("{cpus} vCPUs"),
                 available: format!(
-                    "{} of {} cores, {HOST_CPU_RESERVE} being kept for macOS",
-                    self.cpus.saturating_sub(HOST_CPU_RESERVE),
-                    self.cpus
+                    "the host's {} cores leave {} once macOS keeps {HOST_CPU_RESERVE}",
+                    self.cpus,
+                    self.cpus.saturating_sub(HOST_CPU_RESERVE)
                 ),
             });
         }
         if memory.as_mib().saturating_add(HOST_MEMORY_RESERVE_MIB) > self.memory_mib {
             return Err(RuntimeError::Budget {
                 workload: W::NAME,
-                needed: format!("{memory}iB of memory"),
+                needed: format!("{} MiB of memory", memory.as_mib()),
                 available: format!(
-                    "{} MiB of {} MiB, {HOST_MEMORY_RESERVE_MIB} MiB being kept for macOS",
-                    self.memory_mib.saturating_sub(HOST_MEMORY_RESERVE_MIB),
-                    self.memory_mib
+                    "the host's {} MiB leave {} MiB once macOS keeps {HOST_MEMORY_RESERVE_MIB} MiB",
+                    self.memory_mib,
+                    self.memory_mib.saturating_sub(HOST_MEMORY_RESERVE_MIB)
                 ),
             });
         }
@@ -233,7 +233,7 @@ impl HostBudget {
                 workload: W::NAME,
                 needed: "a share of the host's cores and memory".to_owned(),
                 available: format!(
-                    "{} cores and {} MiB, which leaves nothing once macOS is kept whole",
+                    "the host's {} cores and {} MiB leave nothing once macOS is kept whole",
                     self.cpus, self.memory_mib
                 ),
             });
