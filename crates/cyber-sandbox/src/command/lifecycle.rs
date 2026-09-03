@@ -267,14 +267,16 @@ fn spec(
         reservation,
     );
 
-    // The entrypoint needs NET_ADMIN to install the egress policy and hands it to nothing
-    // else: it drops the capability from the bounding set of the process tree that runs
-    // sample code. The two capabilities below have no use inside the sandbox at all, so
-    // they are removed by the runtime before the guest is even started.
+    // Neither capability below has a use inside the sandbox, so the runtime removes them
+    // before the guest is even started.
     spec.cap_drop = vec![Capability::SysModule, Capability::SysAdmin];
-    // Debuggers, tracers and the rest of the analysis toolchain need to attach to the
-    // processes they are analysing, and the runtime's default set does not include this.
-    spec.cap_add = vec![Capability::SysPtrace];
+    // NET_ADMIN is what the entrypoint installs the egress policy with, and it is not in
+    // the runtime's default set. The entrypoint hands it to nothing else: it drops the
+    // capability from the bounding set of the process tree that runs sample code, so only
+    // the code between container start and sshd ever holds it. SYS_PTRACE is for the
+    // debuggers and tracers in the analysis toolchain, which have to attach to the
+    // processes they are analysing.
+    spec.cap_add = vec![Capability::NetAdmin, Capability::SysPtrace];
     spec.init = true;
 
     if let Some(source) = samples {

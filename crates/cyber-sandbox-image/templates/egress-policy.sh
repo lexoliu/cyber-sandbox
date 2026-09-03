@@ -38,9 +38,17 @@ iptables -P OUTPUT DROP
 iptables -A OUTPUT -o lo -j ACCEPT
 iptables -A OUTPUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
 iptables -A OUTPUT -m owner --uid-owner "${GATEWAY_UID}" -j ACCEPT
-# Nothing else is accepted by protocol. Traffic the redirection above claimed leaves over
-# the loopback rule; traffic it did not claim has no audited path and must not have an
-# unaudited one, so a blanket `-p tcp -j ACCEPT` here would be the one hole in the policy.
+
+# The redirection above rewrote these packets' destination to the loopback address, but
+# the outgoing interface this chain sees is still the one the original route chose, so
+# `-o lo` never matches them. They are accepted by the destination the redirection gave
+# them instead, which is exactly the gateway's two ports and nothing else.
+iptables -A OUTPUT -p tcp -d 127.0.0.1 --dport "${PROXY_PORT}" -j ACCEPT
+iptables -A OUTPUT -p udp -d 127.0.0.1 --dport "${DNS_PORT}" -j ACCEPT
+
+# Nothing else is accepted by protocol. Traffic the redirection did not claim has no
+# audited path and must not have an unaudited one, so a blanket `-p tcp -j ACCEPT` here
+# would be the one hole in the policy.
 # Anything still falling through is a transport the gateway cannot audit, most often QUIC.
 # Record it per packet, then drop it so the client falls back to an auditable transport.
 iptables -A OUTPUT -j NFLOG --nflog-group "${NFLOG_GROUP}" --nflog-prefix "cyber-sandbox-blocked"
