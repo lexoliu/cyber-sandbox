@@ -21,7 +21,10 @@ pub async fn build(host: &Host, arguments: &cli::ImageBuildArgs) -> Result<()> {
     run(
         host,
         &arguments.workspace,
-        arguments.tag.clone(),
+        arguments
+            .tag
+            .clone()
+            .unwrap_or_else(|| cli::default_image(arguments.arch)),
         &arguments.base_image,
         arguments.arch,
         arguments.profile,

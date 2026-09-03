@@ -31,6 +31,14 @@ impl Arch {
         }
     }
 
+    /// The architecture the host runs natively, and so the one a sandbox runs without
+    /// translation.
+    pub const HOST: Self = if cfg!(target_arch = "aarch64") {
+        Self::Arm64
+    } else {
+        Self::Amd64
+    };
+
     /// Whether running this architecture requires Rosetta translation on Apple Silicon.
     #[must_use]
     pub const fn needs_rosetta(self) -> bool {

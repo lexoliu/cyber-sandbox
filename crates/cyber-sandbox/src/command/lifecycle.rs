@@ -8,8 +8,8 @@ use std::{
 use anyhow::{Context as _, Result, bail};
 use askama::Template;
 use cyber_sandbox_runtime::{
-    Capability, ContainerName, ContainerSpec, Cpus, HostBudget, Memory, Mount, Reservation,
-    RunState, Sandbox,
+    Capability, ContainerName, ContainerSpec, Cpus, HostBudget, ImageReference, Memory, Mount,
+    Reservation, RunState, Sandbox,
 };
 use jiff::Timestamp;
 
@@ -60,12 +60,17 @@ pub async fn up(host: &Host, arguments: &cli::Up) -> Result<()> {
         "the host can carry this sandbox"
     );
 
-    if !host.runtime().image_exists(&arguments.image).await? {
-        tracing::info!(image = %arguments.image, "the sandbox image is not built yet");
+    let image = arguments
+        .image
+        .clone()
+        .unwrap_or_else(|| cli::default_image(arguments.arch));
+
+    if !host.runtime().image_exists(&image).await? {
+        tracing::info!(image = %image, "the sandbox image is not built yet");
         image::run(
             host,
             &arguments.workspace,
-            arguments.image.clone(),
+            image.clone(),
             cli::DEFAULT_BASE_IMAGE,
             arguments.arch,
             arguments.profile,
@@ -73,7 +78,15 @@ pub async fn up(host: &Host, arguments: &cli::Up) -> Result<()> {
         .await?;
     }
 
-    let spec = spec(host, arguments, &name, &key, reservation, samples.clone());
+    let spec = spec(
+        host,
+        arguments,
+        image.clone(),
+        &name,
+        &key,
+        reservation,
+        samples.clone(),
+    );
 
     host.runtime()
         .run_detached(&spec)
@@ -85,7 +98,7 @@ pub async fn up(host: &Host, arguments: &cli::Up) -> Result<()> {
 
     let record = SandboxRecord {
         id: arguments.id.clone(),
-        image: arguments.image.clone(),
+        image: image.clone(),
         arch: arguments.arch,
         address,
         ssh_port: layout.ssh_port,
@@ -254,18 +267,14 @@ fn reservation(budget: &HostBudget, arguments: &cli::Up) -> Result<Reservation<S
 fn spec(
     host: &Host,
     arguments: &cli::Up,
+    image: ImageReference,
     name: &ContainerName,
     key: &SandboxKey,
     reservation: Reservation<Sandbox>,
     samples: Option<PathBuf>,
 ) -> ContainerSpec {
     let layout = host.layout();
-    let mut spec = ContainerSpec::new(
-        name.clone(),
-        arguments.image.clone(),
-        arguments.arch,
-        reservation,
-    );
+    let mut spec = ContainerSpec::new(name.clone(), image, arguments.arch, reservation);
 
     // Neither capability below has a use inside the sandbox, so the runtime removes them
     // before the guest is even started.

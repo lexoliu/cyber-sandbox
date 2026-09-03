@@ -4,8 +4,19 @@ use clap::{Args, Parser, Subcommand};
 use cyber_sandbox_image::ToolProfile;
 use cyber_sandbox_runtime::{Arch, ImageReference};
 
-/// Default tag the sandbox image is built under and started from.
-pub const DEFAULT_IMAGE: &str = "localhost/cyber-sandbox:latest";
+/// Repository the sandbox image is built into.
+pub const IMAGE_REPOSITORY: &str = "localhost/cyber-sandbox";
+
+/// Tag the sandbox image for `arch` is built under and started from.
+///
+/// The architecture is the tag rather than `latest`, because an `amd64` sandbox started
+/// from an `arm64` root filesystem is a machine that cannot execute its own userspace.
+/// A single mutable tag would make exactly that the outcome of having built both.
+#[must_use]
+pub fn default_image(arch: Arch) -> ImageReference {
+    ImageReference::new(format!("{IMAGE_REPOSITORY}:{arch}"))
+        .expect("a repository and an architecture always form a valid reference")
+}
 
 /// Kali image the sandbox derives from by default.
 pub const DEFAULT_BASE_IMAGE: &str = "docker.io/kalilinux/kali-rolling:latest";
@@ -69,9 +80,9 @@ pub enum ImageCommand {
 /// Arguments of `image build`.
 #[derive(Debug, Args)]
 pub struct ImageBuildArgs {
-    /// Tag to build the image under.
-    #[arg(long, default_value = DEFAULT_IMAGE)]
-    pub tag: ImageReference,
+    /// Tag to build the image under. Defaults to the architecture being built for.
+    #[arg(long)]
+    pub tag: Option<ImageReference>,
     /// Kali image to derive from.
     #[arg(long, default_value = DEFAULT_BASE_IMAGE)]
     pub base_image: String,
@@ -91,9 +102,10 @@ pub struct ImageBuildArgs {
 pub struct Up {
     /// Name of the sandbox, which is also its container name and agent entry id.
     pub id: String,
-    /// Image to start, built on demand when the runtime does not hold it.
-    #[arg(long, default_value = DEFAULT_IMAGE)]
-    pub image: ImageReference,
+    /// Image to start, built on demand when the runtime does not hold it. Defaults to
+    /// the image for the architecture the sandbox runs.
+    #[arg(long)]
+    pub image: Option<ImageReference>,
     /// Guest architecture. `amd64` runs an `x86_64` root filesystem under Rosetta.
     #[arg(long, default_value = "arm64")]
     pub arch: Arch,
