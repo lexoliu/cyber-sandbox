@@ -44,14 +44,18 @@ impl SandboxRecord {
     /// concrete host, so they have to be rewritten every time the sandbox starts, and
     /// requiring the caller to have just asked the runtime is what stops a stale address
     /// from being written into them.
+    ///
+    /// `known_hosts` is passed for the same reason the address is: it is derived from the
+    /// host's state directory, which the record does not know about.
     #[must_use]
-    pub fn endpoint(&self, address: Ipv4Addr) -> SandboxEndpoint {
+    pub fn endpoint(&self, address: Ipv4Addr, known_hosts: PathBuf) -> SandboxEndpoint {
         SandboxEndpoint {
             id: self.id.clone(),
             user: self.researcher.clone(),
             host: address.to_string(),
             port: self.ssh_port,
             identity_file: self.identity_file.clone(),
+            known_hosts,
             start_directory: self.work_dir.clone(),
         }
     }

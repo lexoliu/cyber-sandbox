@@ -74,6 +74,12 @@ pub fn key_directory(home: &Path) -> PathBuf {
     home.join(".cyber-sandbox").join("keys")
 }
 
+/// Where the host keys sandboxes present are remembered, one file per sandbox.
+#[must_use]
+pub fn known_hosts_directory(home: &Path) -> PathBuf {
+    home.join(".cyber-sandbox").join("known_hosts")
+}
+
 /// Replaces `path` with `contents`, creating the parent directory and never leaving a
 /// half-written configuration behind if the process dies mid-write.
 async fn write_file(path: &Path, contents: &str) -> Result<(), AgentError> {

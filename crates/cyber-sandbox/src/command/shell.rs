@@ -16,7 +16,7 @@ use crate::{cli, host::Host};
 pub async fn run(host: &Host, arguments: &cli::Shell) -> Result<()> {
     let record = host.record(&arguments.id).await?;
     let address = host.address_of(&Host::container_name(&record.id)?).await?;
-    let endpoint = record.endpoint(address);
+    let endpoint = record.endpoint(address, host.known_hosts_of(&record.id).await?);
 
     let mut client = std::process::Command::new("ssh");
     client.args(endpoint.ssh_arguments());
