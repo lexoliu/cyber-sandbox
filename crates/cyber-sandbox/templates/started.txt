@@ -1,25 +1,24 @@
-
 {{ id }} is running.
 
-  address    {{ user }}@{{ address }}:{{ ssh_port }}
   image      {{ image }} ({{ arch }})
   samples    {{ samples }}
-  identity   {{ identity_file }}
+  work       {{ work_dir }}
 
-Both agents keep their credentials on this host and reach the sandbox over SSH, so
-nothing inside it ever holds a token.
+Nothing inside it holds a credential. Both agents keep their tokens on this
+host and run only their tool side in the machine, so a sample that reads every
+file it can reach still finds none.
 
-  codex      /environment, then pick {{ id }}
-  shell      cyber-sandbox ssh {{ id }}
+Open a shell in it:
 
-Claude Code is registered as the SSH connection `{{ id }}`. The installed release does
-not carry the `ssh` subcommand that opens one yet, so until it does, drive the sandbox
-from codex or a shell.
+  cyber-sandbox shell {{ id }}
 
-Every packet the sandbox sends is audited or refused. Watch it with:
+Or hand it to codex: run `/environment` and pick {{ id }}.
+Claude Code is registered against it too, but the release installed here cannot
+open a registered machine of its own accord yet.
+
+Every packet it sends is audited or refused. Watch them go by:
 
   cyber-sandbox audit tail {{ id }} --follow
 
 Registered in {{ claude_settings }}
           and {{ codex_environments }}
-

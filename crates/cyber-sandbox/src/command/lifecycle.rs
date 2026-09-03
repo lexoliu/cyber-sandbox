@@ -31,13 +31,10 @@ const AUTHORIZED_KEY_VARIABLE: &str = "CYBER_SANDBOX_AUTHORIZED_KEY";
 #[template(path = "started.txt", escape = "none")]
 struct Started {
     id: String,
-    user: String,
-    address: String,
-    ssh_port: u16,
     image: String,
     arch: String,
     samples: String,
-    identity_file: String,
+    work_dir: String,
     claude_settings: String,
     codex_environments: String,
 }
@@ -94,9 +91,6 @@ pub async fn up(host: &Host, arguments: &cli::Up) -> Result<()> {
 
     let started = Started {
         id: record.id.clone(),
-        user: record.researcher.clone(),
-        address: address.to_string(),
-        ssh_port: record.ssh_port,
         image: record.image.to_string(),
         arch: record.arch.to_string(),
         samples: record.samples.as_ref().map_or_else(
@@ -109,7 +103,7 @@ pub async fn up(host: &Host, arguments: &cli::Up) -> Result<()> {
                 )
             },
         ),
-        identity_file: record.identity_file.display().to_string(),
+        work_dir: record.work_dir.display().to_string(),
         claude_settings: agents.claude_path().display().to_string(),
         codex_environments: agents.codex_path().display().to_string(),
     }
@@ -385,10 +379,7 @@ fn rows(records: Vec<SandboxRecord>, live: &[ContainerState]) -> Vec<Row> {
                 address: container
                     .filter(|container| container.status.state == RunState::Running)
                     .and_then(ContainerState::ipv4_address)
-                    .map_or_else(
-                        || "-".to_owned(),
-                        |address| format!("{address}:{}", record.ssh_port),
-                    ),
+                    .map_or_else(|| "-".to_owned(), |address| address.to_string()),
                 state: container
                     .map_or("gone", |container| run_state(container.status.state))
                     .to_owned(),
@@ -512,7 +503,7 @@ async fn wait_until_reachable(
                 Some(address) if accepts(SocketAddr::from((address, ssh_port))).await => {
                     return Ok(address);
                 }
-                Some(address) => last = format!("{address}:{ssh_port} is not accepting yet"),
+                Some(address) => last = format!("{address} is not answering yet"),
                 None => "the runtime has not reported an address yet".clone_into(&mut last),
             },
             Err(error) => last = error.to_string(),
@@ -575,7 +566,7 @@ mod tests {
     fn a_running_sandbox_reports_the_address_it_has_now() {
         let rows = rows(vec![record("live")], &live());
         assert_eq!(
-            rows[0].address, "192.168.65.29:22",
+            rows[0].address, "192.168.65.29",
             "the runtime is the authority: a container that has been restarted is on a \
              different address than the one the host recorded"
         );

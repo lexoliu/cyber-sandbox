@@ -48,7 +48,7 @@ pub enum Command {
     /// Starts a sandbox and registers it with both agents.
     Up(Up),
     /// Opens a shell, or runs a command, inside a running sandbox.
-    Ssh(Ssh),
+    Shell(Shell),
     /// Stops a sandbox without destroying it.
     Down(Target),
     /// Lists the sandboxes the host knows about.
@@ -139,9 +139,9 @@ pub struct Target {
     pub id: String,
 }
 
-/// Arguments of `ssh`.
+/// Arguments of `shell`.
 #[derive(Debug, Args)]
-pub struct Ssh {
+pub struct Shell {
     /// Name of the sandbox.
     pub id: String,
     /// Command to run instead of an interactive shell.

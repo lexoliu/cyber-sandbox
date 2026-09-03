@@ -44,7 +44,7 @@ async fn main() -> Result<()> {
             cli::ImageCommand::Build(build) => command::image::build(&host, build).await,
         },
         cli::Command::Up(up) => command::lifecycle::up(&host, up).await,
-        cli::Command::Ssh(ssh) => command::ssh::run(&host, ssh).await,
+        cli::Command::Shell(shell) => command::shell::run(&host, shell).await,
         cli::Command::Down(target) => command::lifecycle::down(&host, target).await,
         cli::Command::Ls => command::lifecycle::ls(&host).await,
         cli::Command::Rm(target) => command::lifecycle::rm(&host, target).await,
