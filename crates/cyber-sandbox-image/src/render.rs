@@ -171,8 +171,18 @@ mod tests {
     #[test]
     fn the_gateway_uid_is_the_only_uid_exempt_from_redirection() {
         let policy = rendered().egress_policy;
-        assert!(policy.contains("readonly GATEWAY_UID=999"));
+        assert!(policy.contains("readonly GATEWAY_UID=65001"));
         assert!(policy.contains("--uid-owner \"${GATEWAY_UID}\" -j RETURN"));
+    }
+
+    #[test]
+    fn redirected_traffic_is_accepted_only_at_the_gateway_ports() {
+        let policy = rendered().egress_policy;
+        // The redirection rewrites the destination to the loopback address, so this is
+        // the rule that lets audited traffic out at all. Without it the default drop
+        // swallows every connection the gateway was supposed to see.
+        assert!(policy.contains("-p tcp -d 127.0.0.1 --dport \"${PROXY_PORT}\" -j ACCEPT"));
+        assert!(policy.contains("-p udp -d 127.0.0.1 --dport \"${DNS_PORT}\" -j ACCEPT"));
     }
 
     #[test]
@@ -196,9 +206,12 @@ mod tests {
                 "iptables -A OUTPUT -o lo -j ACCEPT",
                 "iptables -A OUTPUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT",
                 "iptables -A OUTPUT -m owner --uid-owner \"${GATEWAY_UID}\" -j ACCEPT",
+                "iptables -A OUTPUT -p tcp -d 127.0.0.1 --dport \"${PROXY_PORT}\" -j ACCEPT",
+                "iptables -A OUTPUT -p udp -d 127.0.0.1 --dport \"${DNS_PORT}\" -j ACCEPT",
             ],
-            "an accept matched by protocol rather than by uid or interface would let \
-             traffic the redirection missed leave unaudited"
+            "every accept is matched by interface, uid, connection state, or the \
+             loopback destination the redirection itself wrote; an accept matched by \
+             protocol alone would let traffic the redirection missed leave unaudited"
         );
     }
 
