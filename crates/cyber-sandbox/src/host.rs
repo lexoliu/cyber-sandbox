@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context as _, Result, bail};
 use cyber_sandbox_agents::{AgentIntegration, key_directory};
 use cyber_sandbox_image::SandboxLayout;
-use cyber_sandbox_runtime::{AppleContainer, ContainerName, HostBudget};
+use cyber_sandbox_runtime::{AppleContainer, Committed, ContainerName, HostBudget};
 
 use crate::record::SandboxRecord;
 
@@ -52,16 +52,26 @@ impl Host {
     /// That volume is the one that matters: it is where a build's layer snapshots and a
     /// sandbox's writes land, and filling it is what stops macOS growing a swapfile.
     ///
+    /// Every virtual machine the runtime is already running is charged against the
+    /// measurement, so a second sandbox is sized against the host as it is rather than as
+    /// it was before the first one started.
+    ///
     /// # Errors
-    /// Fails when the runtime cannot report where its state lives, or when the host's
-    /// cores, memory or free space cannot be measured.
+    /// Fails when the runtime cannot report where its state lives or what it is running,
+    /// or when the host's cores, memory or free space cannot be measured.
     pub async fn budget(&self) -> Result<HostBudget> {
         let status = self
             .runtime
             .system_status()
             .await
             .context("asking the runtime where it stores its state")?;
-        HostBudget::measure(Path::new(&status.app_root)).map_err(Into::into)
+        let running = self
+            .runtime
+            .list()
+            .await
+            .context("asking the runtime what it is already running")?;
+        HostBudget::measure(Path::new(&status.app_root), Committed::of(&running))
+            .map_err(Into::into)
     }
 
     /// The layout the sandbox image was rendered from.

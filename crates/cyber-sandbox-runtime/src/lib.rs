@@ -13,7 +13,7 @@ mod inspect;
 mod spec;
 
 pub use apple::{AppleContainer, ExecOutput, ExecStream, ImageBuild};
-pub use budget::{Build, HostBudget, Reservation, Sandbox, Workload};
+pub use budget::{Build, Committed, HostBudget, Reservation, Sandbox, Workload};
 pub use error::RuntimeError;
 pub use inspect::{ContainerState, NetworkStatus, Resources, RunState, SystemStatus};
 pub use spec::{

@@ -18,7 +18,7 @@ use crate::{
 };
 
 /// Name the runtime registers the shared image builder under.
-const BUILDER: &str = "buildkit";
+pub(crate) const BUILDER: &str = "buildkit";
 
 /// Driver for the `container` CLI.
 #[derive(Debug, Clone)]

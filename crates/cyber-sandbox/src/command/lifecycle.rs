@@ -51,14 +51,18 @@ pub async fn up(host: &Host, arguments: &cli::Up) -> Result<()> {
     let name = Host::container_name(&arguments.id)?;
     ensure_absent(host, &name).await?;
 
-    let key = SandboxKey::load_or_create(&host.key_directory(), &arguments.id).await?;
     let samples = canonical_samples(arguments.samples.as_deref())?;
+
+    // Sizing is checked before anything is created, so a host that cannot carry another
+    // sandbox refuses without leaving an identity or a container behind.
     let reservation = reservation(&host.budget().await?, arguments)?;
     tracing::info!(
         cpus = %reservation.cpus(),
         memory = %reservation.memory(),
         "the host can carry this sandbox"
     );
+
+    let key = SandboxKey::load_or_create(&host.key_directory(), &arguments.id).await?;
 
     let image = arguments
         .image
@@ -253,14 +257,21 @@ const fn run_state(state: RunState) -> &'static str {
 /// Sizes the sandbox: what the caller asked for where they said so, half of what the
 /// host can spare everywhere else, and in either case checked against the host.
 ///
+/// The suggestion is only consulted for the dimensions the caller left open, so a host
+/// with too little spare to suggest an allocation still reports what was actually asked
+/// for when the caller sized the sandbox themselves.
+///
 /// # Errors
 /// Fails when the host cannot carry the requested — or the derived — allocation.
 fn reservation(budget: &HostBudget, arguments: &cli::Up) -> Result<Reservation<Sandbox>> {
-    let suggested = budget.suggest::<Sandbox>()?;
-    let cpus = arguments.cpus.map_or_else(|| suggested.cpus(), Cpus::new);
-    let memory = arguments
-        .memory_mib
-        .map_or_else(|| suggested.memory(), Memory::from_mib);
+    let cpus = match arguments.cpus {
+        Some(cpus) => Cpus::new(cpus),
+        None => budget.suggest::<Sandbox>()?.cpus(),
+    };
+    let memory = match arguments.memory_mib {
+        Some(mebibytes) => Memory::from_mib(mebibytes),
+        None => budget.suggest::<Sandbox>()?.memory(),
+    };
     budget.reserve(cpus, memory).map_err(Into::into)
 }
 
