@@ -8,7 +8,8 @@ use std::{
 use anyhow::{Context as _, Result, bail};
 use askama::Template;
 use cyber_sandbox_runtime::{
-    Capability, ContainerName, ContainerSpec, Cpus, Memory, Mount, RunState,
+    Capability, ContainerName, ContainerSpec, Cpus, HostBudget, Memory, Mount, Reservation,
+    RunState, Sandbox,
 };
 use jiff::Timestamp;
 
@@ -50,6 +51,15 @@ pub async fn up(host: &Host, arguments: &cli::Up) -> Result<()> {
     let name = Host::container_name(&arguments.id)?;
     ensure_absent(host, &name).await?;
 
+    let key = SandboxKey::load_or_create(&host.key_directory(), &arguments.id).await?;
+    let samples = canonical_samples(arguments.samples.as_deref())?;
+    let reservation = reservation(&host.budget().await?, arguments)?;
+    tracing::info!(
+        cpus = %reservation.cpus(),
+        memory = %reservation.memory(),
+        "the host can carry this sandbox"
+    );
+
     if !host.runtime().image_exists(&arguments.image).await? {
         tracing::info!(image = %arguments.image, "the sandbox image is not built yet");
         image::run(
@@ -63,9 +73,7 @@ pub async fn up(host: &Host, arguments: &cli::Up) -> Result<()> {
         .await?;
     }
 
-    let key = SandboxKey::load_or_create(&host.key_directory(), &arguments.id).await?;
-    let samples = canonical_samples(arguments.samples.as_deref())?;
-    let spec = spec(host, arguments, &name, &key, samples.clone());
+    let spec = spec(host, arguments, &name, &key, reservation, samples.clone());
 
     host.runtime()
         .run_detached(&spec)
@@ -229,11 +237,26 @@ const fn run_state(state: RunState) -> &'static str {
     }
 }
 
+/// Sizes the sandbox: what the caller asked for where they said so, half of what the
+/// host can spare everywhere else, and in either case checked against the host.
+///
+/// # Errors
+/// Fails when the host cannot carry the requested — or the derived — allocation.
+fn reservation(budget: &HostBudget, arguments: &cli::Up) -> Result<Reservation<Sandbox>> {
+    let suggested = budget.suggest::<Sandbox>()?;
+    let cpus = arguments.cpus.map_or_else(|| suggested.cpus(), Cpus::new);
+    let memory = arguments
+        .memory_mib
+        .map_or_else(|| suggested.memory(), Memory::from_mib);
+    budget.reserve(cpus, memory).map_err(Into::into)
+}
+
 fn spec(
     host: &Host,
     arguments: &cli::Up,
     name: &ContainerName,
     key: &SandboxKey,
+    reservation: Reservation<Sandbox>,
     samples: Option<PathBuf>,
 ) -> ContainerSpec {
     let layout = host.layout();
@@ -241,8 +264,7 @@ fn spec(
         name.clone(),
         arguments.image.clone(),
         arguments.arch,
-        Cpus::new(arguments.cpus),
-        Memory::from_mib(arguments.memory_mib),
+        reservation,
     );
 
     // The entrypoint needs NET_ADMIN to install the egress policy and hands it to nothing

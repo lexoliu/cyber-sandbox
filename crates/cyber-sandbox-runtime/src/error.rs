@@ -56,6 +56,26 @@ pub enum RuntimeError {
     #[error("the runtime reports no container named `{0}`")]
     NoSuchContainer(ContainerName),
 
+    /// The host cannot carry a workload the caller asked to start.
+    #[error("the host cannot run {workload}: it needs {needed}, but only {available} is available")]
+    Budget {
+        /// Workload that was refused.
+        workload: &'static str,
+        /// What the workload asked for.
+        needed: String,
+        /// What the host actually has.
+        available: String,
+    },
+
+    /// A property of the host could not be measured.
+    #[error("could not measure the host's {what}: {reason}")]
+    Probe {
+        /// Property that could not be read.
+        what: &'static str,
+        /// Why it could not be read.
+        reason: String,
+    },
+
     /// A value that must satisfy the runtime's naming rules did not.
     #[error("`{value}` is not a valid {kind}: {reason}")]
     InvalidValue {

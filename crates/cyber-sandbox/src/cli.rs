@@ -97,12 +97,15 @@ pub struct Up {
     /// Guest architecture. `amd64` runs an `x86_64` root filesystem under Rosetta.
     #[arg(long, default_value = "arm64")]
     pub arch: Arch,
-    /// Virtual CPUs the sandbox is given.
-    #[arg(long, default_value = "4")]
-    pub cpus: NonZeroU32,
-    /// Memory in mebibytes.
-    #[arg(long, default_value = "8192")]
-    pub memory_mib: NonZeroU32,
+    /// Virtual CPUs the sandbox is given. Defaults to half of what the host can spare.
+    #[arg(long)]
+    pub cpus: Option<NonZeroU32>,
+    /// Memory in mebibytes. Defaults to half of what the host can spare.
+    ///
+    /// Whatever is asked for is checked against the host first: a sandbox is never given
+    /// so much that macOS is left without its own share.
+    #[arg(long)]
+    pub memory_mib: Option<NonZeroU32>,
     /// Host directory exposed read-only as the sample source.
     #[arg(long)]
     pub samples: Option<PathBuf>,

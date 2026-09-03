@@ -2,7 +2,10 @@ use std::{collections::BTreeMap, fmt, num::NonZeroU32, path::PathBuf};
 
 use serde::{Deserialize, Serialize};
 
-use crate::error::RuntimeError;
+use crate::{
+    budget::{Reservation, Sandbox},
+    error::RuntimeError,
+};
 
 /// Guest architecture a container runs as.
 ///
@@ -361,10 +364,8 @@ pub struct ContainerSpec {
     pub image: ImageReference,
     /// Guest architecture.
     pub arch: Arch,
-    /// Virtual CPU count.
-    pub cpus: Cpus,
-    /// Memory allocation.
-    pub memory: Memory,
+    /// Sizing the host was measured against and found able to carry.
+    pub reservation: Reservation<Sandbox>,
     /// Identity of the init process.
     pub user: Option<UserSpec>,
     /// Capabilities added on top of the runtime default set.
@@ -398,15 +399,13 @@ impl ContainerSpec {
         name: ContainerName,
         image: ImageReference,
         arch: Arch,
-        cpus: Cpus,
-        memory: Memory,
+        reservation: Reservation<Sandbox>,
     ) -> Self {
         Self {
             name,
             image,
             arch,
-            cpus,
-            memory,
+            reservation,
             user: None,
             cap_add: Vec::new(),
             cap_drop: Vec::new(),
@@ -432,9 +431,9 @@ impl ContainerSpec {
             "--arch".to_owned(),
             self.arch.as_str().to_owned(),
             "--cpus".to_owned(),
-            self.cpus.to_string(),
+            self.reservation.cpus().to_string(),
             "--memory".to_owned(),
-            self.memory.to_string(),
+            self.reservation.memory().to_string(),
         ];
         if self.arch.needs_rosetta() {
             args.push("--rosetta".to_owned());
@@ -500,8 +499,10 @@ mod tests {
             ContainerName::new("cyber-sandbox-demo").unwrap(),
             ImageReference::new("localhost/cyber-sandbox:latest").unwrap(),
             Arch::Arm64,
-            Cpus::new(NonZeroU32::new(4).unwrap()),
-            Memory::from_mib(NonZeroU32::new(8192).unwrap()),
+            Reservation::for_tests(
+                Cpus::new(NonZeroU32::new(4).unwrap()),
+                Memory::from_mib(NonZeroU32::new(8192).unwrap()),
+            ),
         )
     }
 

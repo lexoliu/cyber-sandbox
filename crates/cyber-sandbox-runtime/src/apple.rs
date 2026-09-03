@@ -11,10 +11,14 @@ use tokio::{
 use tracing::debug;
 
 use crate::{
+    budget::{Build, Reservation},
     error::RuntimeError,
-    inspect::{ContainerState, SystemStatus},
+    inspect::{ContainerState, RunState, SystemStatus},
     spec::{Arch, ContainerName, ContainerSpec, ImageReference},
 };
+
+/// Name the runtime registers the shared image builder under.
+const BUILDER: &str = "buildkit";
 
 /// Driver for the `container` CLI.
 #[derive(Debug, Clone)]
@@ -364,9 +368,19 @@ impl AppleContainer {
 
     /// Builds an image, streaming the builder's progress to this process's stderr.
     ///
+    /// Takes a reservation rather than building with whatever builder happens to exist:
+    /// the builder is a persistent VM whose sizing is fixed at creation, and an uncapped
+    /// one is what exhausted this host on 2026-09-03.
+    ///
     /// # Errors
-    /// Fails when the build exits non-zero.
-    pub async fn build(&self, build: &ImageBuild) -> Result<(), RuntimeError> {
+    /// Fails when the builder cannot be brought up at `reservation`'s sizing, or when the
+    /// build itself exits non-zero.
+    pub async fn build(
+        &self,
+        build: &ImageBuild,
+        reservation: &Reservation<Build>,
+    ) -> Result<(), RuntimeError> {
+        self.ensure_builder(reservation).await?;
         let mut args = vec![
             "build".to_owned(),
             "--tag".to_owned(),
@@ -382,6 +396,59 @@ impl AppleContainer {
         }
         args.push(build.context.display().to_string());
         self.status(&args).await
+    }
+
+    /// Brings the shared builder up at exactly `reservation`'s sizing.
+    ///
+    /// A builder that already runs at that sizing is left alone, so its layer cache
+    /// survives. One created with a different allocation is deleted and recreated: the
+    /// allocation cannot be changed in place, and reusing an unknown one defeats the
+    /// budget.
+    ///
+    /// # Errors
+    /// Fails when the builder cannot be listed, deleted or started.
+    pub async fn ensure_builder(
+        &self,
+        reservation: &Reservation<Build>,
+    ) -> Result<(), RuntimeError> {
+        match self.builder().await? {
+            Some(state) if state.configuration.resources.matches(reservation) => {
+                if state.status.state == RunState::Running {
+                    return Ok(());
+                }
+            }
+            Some(state) => {
+                debug!(
+                    cpus = state.configuration.resources.cpus,
+                    memory = state.configuration.resources.memory_in_bytes,
+                    "the existing builder is not sized to the host's budget; recreating it"
+                );
+                self.output(&["builder", "delete", "--force"]).await?;
+            }
+            None => {}
+        }
+        self.output(&[
+            "builder",
+            "start",
+            "--cpus",
+            &reservation.cpus().to_string(),
+            "--memory",
+            &reservation.memory().to_string(),
+        ])
+        .await
+        .map(drop)
+    }
+
+    /// The shared image builder, when the runtime holds one.
+    ///
+    /// # Errors
+    /// Fails when the runtime's container list cannot be read.
+    pub async fn builder(&self) -> Result<Option<ContainerState>, RuntimeError> {
+        Ok(self
+            .list()
+            .await?
+            .into_iter()
+            .find(|container| container.id.as_str() == BUILDER))
     }
 
     async fn output<S: AsRef<OsStr> + AsRef<str>>(

@@ -2,7 +2,10 @@ use std::net::{Ipv4Addr, Ipv6Addr};
 
 use serde::Deserialize;
 
-use crate::spec::{Arch, ContainerName};
+use crate::{
+    budget::{Reservation, Workload},
+    spec::{Arch, ContainerName},
+};
 
 /// Health of the `container` system services.
 #[derive(Debug, Clone, Deserialize)]
@@ -72,7 +75,34 @@ pub struct Configuration {
     pub platform: Platform,
     /// Whether Rosetta translation is enabled.
     pub rosetta: bool,
+    /// Sizing the container was created with.
+    pub resources: Resources,
 }
+
+/// Sizing a container was created with.
+///
+/// A VM's allocation is fixed at creation, so this is how a container that already exists
+/// is checked against the budget it should have been created under.
+#[derive(Debug, Clone, Copy, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Resources {
+    /// Virtual CPUs allocated.
+    pub cpus: u32,
+    /// Memory allocated, in bytes.
+    pub memory_in_bytes: u64,
+}
+
+impl Resources {
+    /// Whether this allocation is exactly what `reservation` asks for.
+    #[must_use]
+    pub fn matches<W: Workload>(&self, reservation: &Reservation<W>) -> bool {
+        self.cpus == reservation.cpus().get()
+            && self.memory_in_bytes == u64::from(reservation.memory().as_mib()) * MEBIBYTE
+    }
+}
+
+/// Bytes in a mebibyte, the granularity the runtime reports memory at.
+const MEBIBYTE: u64 = 1024 * 1024;
 
 /// Guest platform of a container.
 #[derive(Debug, Clone, Deserialize)]

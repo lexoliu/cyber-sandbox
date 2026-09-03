@@ -2,9 +2,12 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context as _, Result, bail};
 use cyber_sandbox_image::{BuildContext, ToolProfile};
-use cyber_sandbox_runtime::{Arch, ImageReference};
+use cyber_sandbox_runtime::{Arch, Build, ImageReference};
 
 use crate::{cli, host::Host};
+
+/// Bytes in a gibibyte, for reporting free space.
+const GIB: u64 = 1024 * 1024 * 1024;
 
 /// Crate whose presence proves the given directory really is the cyber-sandbox workspace.
 const GATEWAY_CRATE: &str = "crates/cyber-sandbox-gateway/Cargo.toml";
@@ -63,8 +66,17 @@ pub async fn run(
     .await
     .context("staging the image build context")?;
 
+    let budget = host.budget().await?;
+    let reservation = budget.suggest::<Build>()?;
+    tracing::info!(
+        cpus = %reservation.cpus(),
+        memory = %reservation.memory(),
+        free_disk_gib = budget.free_disk() / GIB,
+        "the host can carry this build"
+    );
+
     host.runtime()
-        .build(&context.build_request())
+        .build(&context.build_request(), &reservation)
         .await
         .context("building the sandbox image")
 }

@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context as _, Result, bail};
 use cyber_sandbox_agents::{AgentIntegration, key_directory};
 use cyber_sandbox_image::SandboxLayout;
-use cyber_sandbox_runtime::{AppleContainer, ContainerName};
+use cyber_sandbox_runtime::{AppleContainer, ContainerName, HostBudget};
 
 use crate::record::SandboxRecord;
 
@@ -44,6 +44,24 @@ impl Host {
     #[must_use]
     pub fn runtime(&self) -> &AppleContainer {
         &self.runtime
+    }
+
+    /// Measures what the host can spare, against the volume the runtime stores images
+    /// and VM disks on.
+    ///
+    /// That volume is the one that matters: it is where a build's layer snapshots and a
+    /// sandbox's writes land, and filling it is what stops macOS growing a swapfile.
+    ///
+    /// # Errors
+    /// Fails when the runtime cannot report where its state lives, or when the host's
+    /// cores, memory or free space cannot be measured.
+    pub async fn budget(&self) -> Result<HostBudget> {
+        let status = self
+            .runtime
+            .system_status()
+            .await
+            .context("asking the runtime where it stores its state")?;
+        HostBudget::measure(Path::new(&status.app_root)).map_err(Into::into)
     }
 
     /// The layout the sandbox image was rendered from.
