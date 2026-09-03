@@ -13,7 +13,7 @@ use crate::{cli, host::Host};
 /// # Errors
 /// Fails when no such sandbox is known, or when `ssh` cannot be executed at all. It
 /// never returns on success, because this process ceases to exist.
-pub async fn run(host: &Host, arguments: &cli::Ssh) -> Result<()> {
+pub async fn run(host: &Host, arguments: &cli::Shell) -> Result<()> {
     let record = host.record(&arguments.id).await?;
     let address = host.address_of(&Host::container_name(&record.id)?).await?;
     let endpoint = record.endpoint(address);
@@ -31,7 +31,7 @@ pub async fn run(host: &Host, arguments: &cli::Ssh) -> Result<()> {
         client.args(&arguments.command);
     }
 
-    Err(client.exec()).with_context(|| format!("running ssh to reach `{}`", record.id))
+    Err(client.exec()).with_context(|| format!("opening a session in `{}`", record.id))
 }
 
 /// Quotes `value` for a POSIX shell, since the remote command is interpreted by one.

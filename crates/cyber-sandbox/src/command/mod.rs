@@ -4,4 +4,4 @@ pub mod audit;
 pub mod doctor;
 pub mod image;
 pub mod lifecycle;
-pub mod ssh;
+pub mod shell;

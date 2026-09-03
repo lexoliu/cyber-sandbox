@@ -32,8 +32,8 @@ host. What the audit records is everything the *sample* and the agents' *tools* 
 cyber-sandbox doctor --fix          # check the host, start the runtime
 cyber-sandbox image build           # build the Kali + gateway image
 cyber-sandbox up lab --samples ~/samples
-claude ssh lab                      # Claude Code, tools inside, credentials outside
-cyber-sandbox ssh lab               # a shell in the sandbox
+cyber-sandbox shell lab             # a shell in the sandbox
+codex                               # /environment, then pick lab
 cyber-sandbox audit tail lab -f     # watch every packet it sends
 cyber-sandbox rm lab
 ```
