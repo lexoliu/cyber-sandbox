@@ -184,6 +184,25 @@ mod tests {
     }
 
     #[test]
+    fn nothing_but_the_gateway_and_loopback_is_accepted_on_the_way_out() {
+        let policy = rendered().egress_policy;
+        let accepts: Vec<&str> = policy
+            .lines()
+            .filter(|line| line.starts_with("iptables -A OUTPUT") && line.ends_with("-j ACCEPT"))
+            .collect();
+        assert_eq!(
+            accepts,
+            vec![
+                "iptables -A OUTPUT -o lo -j ACCEPT",
+                "iptables -A OUTPUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT",
+                "iptables -A OUTPUT -m owner --uid-owner \"${GATEWAY_UID}\" -j ACCEPT",
+            ],
+            "an accept matched by protocol rather than by uid or interface would let \
+             traffic the redirection missed leave unaudited"
+        );
+    }
+
+    #[test]
     fn the_entrypoint_drops_net_admin_before_running_anything_untrusted() {
         let entrypoint = rendered().entrypoint;
         let policy_at = entrypoint.find("egress-policy.sh").unwrap();
