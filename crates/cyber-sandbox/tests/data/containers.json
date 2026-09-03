@@ -1,11 +1,20 @@
 [
   {
-    "id": "live",
     "configuration": {
-      "platform": { "architecture": "amd64", "os": "linux" },
-      "resources": { "cpus": 2, "memoryInBytes": 4294967296 },
+      "image": {
+        "reference": "localhost/cyber-sandbox:amd64"
+      },
+      "platform": {
+        "architecture": "amd64",
+        "os": "linux"
+      },
+      "resources": {
+        "cpus": 2,
+        "memoryInBytes": 4294967296
+      },
       "rosetta": true
     },
+    "id": "live",
     "status": {
       "networks": [
         {
@@ -19,12 +28,24 @@
     }
   },
   {
-    "id": "halted",
     "configuration": {
-      "platform": { "architecture": "arm64", "os": "linux" },
-      "resources": { "cpus": 5, "memoryInBytes": 12884901888 },
+      "image": {
+        "reference": "localhost/cyber-sandbox:latest"
+      },
+      "platform": {
+        "architecture": "arm64",
+        "os": "linux"
+      },
+      "resources": {
+        "cpus": 5,
+        "memoryInBytes": 12884901888
+      },
       "rosetta": false
     },
-    "status": { "networks": [], "state": "stopped" }
+    "id": "halted",
+    "status": {
+      "networks": [],
+      "state": "stopped"
+    }
   }
 ]

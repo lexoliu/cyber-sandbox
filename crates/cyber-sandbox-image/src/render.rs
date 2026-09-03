@@ -322,10 +322,8 @@ mod tests {
              {dockerfile}"
         );
         assert!(
-            dockerfile.contains(&format!(
-                "openssh-{}.tar.gz",
-                build.version()
-            )) && dockerfile.contains(build.sha256()),
+            dockerfile.contains(&format!("openssh-{}.tar.gz", build.version()))
+                && dockerfile.contains(build.sha256()),
             "the release is pinned by version and checksum"
         );
         assert!(

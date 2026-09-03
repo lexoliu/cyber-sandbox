@@ -7,6 +7,9 @@
       "capDrop": [],
       "creationDate": "2026-09-03T03:46:17Z",
       "id": "cs-probe",
+      "image": {
+        "reference": "localhost/cyber-sandbox:latest"
+      },
       "platform": {
         "architecture": "arm64",
         "os": "linux"
@@ -51,6 +54,9 @@
       "capDrop": [],
       "creationDate": "2026-09-03T03:46:17Z",
       "id": "cs-stopped",
+      "image": {
+        "reference": "localhost/cyber-sandbox:latest"
+      },
       "platform": {
         "architecture": "arm64",
         "os": "linux"

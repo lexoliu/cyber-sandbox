@@ -1,10 +1,14 @@
-use std::net::{Ipv4Addr, Ipv6Addr};
+use std::{
+    net::{Ipv4Addr, Ipv6Addr},
+    num::NonZeroU32,
+};
 
 use serde::Deserialize;
 
 use crate::{
     budget::{Reservation, Workload},
-    spec::{Arch, ContainerName},
+    error::RuntimeError,
+    spec::{Arch, ContainerName, Cpus, ImageReference, Memory},
 };
 
 /// Health of the `container` system services.
@@ -71,12 +75,21 @@ impl ContainerState {
 /// Creation-time configuration of a container.
 #[derive(Debug, Clone, Deserialize)]
 pub struct Configuration {
+    /// Image the container was created from.
+    pub image: ImageDescription,
     /// Guest platform.
     pub platform: Platform,
     /// Whether Rosetta translation is enabled.
     pub rosetta: bool,
     /// Sizing the container was created with.
     pub resources: Resources,
+}
+
+/// The image a container was created from.
+#[derive(Debug, Clone, Deserialize)]
+pub struct ImageDescription {
+    /// Reference the image was built or pulled under.
+    pub reference: ImageReference,
 }
 
 /// Sizing a container was created with.
@@ -98,6 +111,33 @@ impl Resources {
     pub fn matches<W: Workload>(&self, reservation: &Reservation<W>) -> bool {
         self.cpus == reservation.cpus().get()
             && self.memory_in_bytes == u64::from(reservation.memory().as_mib()) * MEBIBYTE
+    }
+
+    /// The allocation expressed in the dimensions a reservation is made in.
+    ///
+    /// A machine's size is fixed when it is created, so a container that already exists
+    /// has to ask the host for the allocation it already has rather than a freshly
+    /// suggested one.
+    ///
+    /// # Errors
+    /// Fails when the runtime reports an allocation no machine can have: no vCPU at all,
+    /// or a memory size that is not a whole number of mebibytes.
+    pub fn allocation(&self) -> Result<(Cpus, Memory), RuntimeError> {
+        let cpus = NonZeroU32::new(self.cpus).ok_or_else(|| RuntimeError::InvalidValue {
+            kind: "container allocation",
+            value: format!("{} vCPUs", self.cpus),
+            reason: "a machine runs on at least one",
+        })?;
+        let mebibytes = u32::try_from(self.memory_in_bytes / MEBIBYTE)
+            .ok()
+            .filter(|_| self.memory_in_bytes.is_multiple_of(MEBIBYTE))
+            .and_then(NonZeroU32::new)
+            .ok_or_else(|| RuntimeError::InvalidValue {
+                kind: "container allocation",
+                value: format!("{} bytes of memory", self.memory_in_bytes),
+                reason: "memory is allocated in whole mebibytes",
+            })?;
+        Ok((Cpus::new(cpus), Memory::from_mib(mebibytes)))
     }
 }
 

@@ -15,7 +15,8 @@ use crate::{cli, host::Host};
 /// never returns on success, because this process ceases to exist.
 pub async fn run(host: &Host, arguments: &cli::Ssh) -> Result<()> {
     let record = host.record(&arguments.id).await?;
-    let endpoint = record.endpoint();
+    let address = host.address_of(&Host::container_name(&record.id)?).await?;
+    let endpoint = record.endpoint(address);
 
     let mut client = std::process::Command::new("ssh");
     client.args(endpoint.ssh_arguments());

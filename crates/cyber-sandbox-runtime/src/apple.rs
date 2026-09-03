@@ -11,7 +11,7 @@ use tokio::{
 use tracing::debug;
 
 use crate::{
-    budget::{Build, Reservation},
+    budget::{Build, Reservation, Workload},
     error::RuntimeError,
     inspect::{ContainerState, RunState, SystemStatus},
     spec::{Arch, ContainerName, ContainerSpec, ImageReference},
@@ -344,6 +344,42 @@ impl AppleContainer {
             Err(RuntimeError::Command { .. }) => Ok(false),
             Err(other) => Err(other),
         }
+    }
+
+    /// Starts a container that already exists.
+    ///
+    /// Takes a reservation for the same reason `run_detached` does. A stopped machine
+    /// costs the host nothing and a started one costs its whole allocation, so starting
+    /// one is an allocation like any other and has to be checked against the host first.
+    /// The machine's own size is what the caller must have reserved: a machine sized
+    /// differently is refused rather than started against a budget checked for something
+    /// else.
+    ///
+    /// # Errors
+    /// Fails when the runtime does not know the container, when its allocation is not the
+    /// one that was reserved, or when the runtime refuses to start it.
+    pub async fn start<W: Workload>(
+        &self,
+        name: &ContainerName,
+        reservation: &Reservation<W>,
+    ) -> Result<(), RuntimeError> {
+        let resources = self.inspect(name).await?.configuration.resources;
+        if !resources.matches(reservation) {
+            return Err(RuntimeError::InvalidValue {
+                kind: "reservation for a container that already exists",
+                value: format!(
+                    "{} vCPUs / {} MiB reserved for a machine of {} vCPUs / {} MiB",
+                    reservation.cpus(),
+                    reservation.memory().as_mib(),
+                    resources.cpus,
+                    resources.memory_in_bytes / (1024 * 1024),
+                ),
+                reason: "a machine's size is fixed when it is created",
+            });
+        }
+        self.output(&["start".to_owned(), name.to_string()])
+            .await
+            .map(drop)
     }
 
     /// Stops a running container.
