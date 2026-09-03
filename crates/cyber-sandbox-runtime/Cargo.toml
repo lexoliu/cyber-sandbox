@@ -12,6 +12,7 @@ rust-version.workspace = true
 jiff = { version = "0.2", features = ["serde"] }
 serde.workspace = true
 serde_json.workspace = true
+sysinfo.workspace = true
 thiserror.workspace = true
 tokio.workspace = true
 tracing.workspace = true

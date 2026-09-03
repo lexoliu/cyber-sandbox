@@ -16,6 +16,7 @@ use crate::{
     audit::AuditSink,
     error::{GatewayError, Result},
     http::{self, ExchangeContext},
+    peer::{Tcp, owner_of},
     redirect::original_destination,
     stream::{Prefixed, looks_like_http, looks_like_tls},
     tls::TlsBridge,
@@ -52,6 +53,13 @@ async fn handle(
     sink: AuditSink,
 ) -> Result<()> {
     let destination = original_destination(&stream)?;
+    // The account that opened this connection is only recoverable while its socket is
+    // still in the kernel's table, which is now: the connection is established and the
+    // gateway has not yet started relaying it.
+    let SocketAddr::V4(source) = peer else {
+        return Err(GatewayError::NotIpv4 { peer });
+    };
+    let sink = sink.attributed_to(owner_of::<Tcp>(source).await?);
     let endpoint = Endpoint {
         ip: destination.ip(),
         port: destination.port(),

@@ -2,7 +2,7 @@ use std::io::Write as _;
 
 use anyhow::{Context as _, Result};
 use askama::Template;
-use cyber_sandbox_runtime::ImageReference;
+use cyber_sandbox_runtime::Arch;
 
 use crate::{cli, host::Host};
 
@@ -113,17 +113,15 @@ async fn system_services(host: &Host, fix: bool) -> Check {
 }
 
 async fn sandbox_image(host: &Host) -> Check {
-    let Ok(reference) = ImageReference::new(cli::DEFAULT_IMAGE) else {
-        return Check::failed("sandbox image", "the default image tag is not a reference");
-    };
+    // Only the host's own architecture is checked. An `amd64` image is a deliberate extra
+    // step for analysing `x86_64` samples, and its absence does not stop the host running
+    // sandboxes.
+    let reference = cli::default_image(Arch::HOST);
     match host.runtime().image_exists(&reference).await {
-        Ok(true) => Check::ok("sandbox image", cli::DEFAULT_IMAGE),
+        Ok(true) => Check::ok("sandbox image", reference.to_string()),
         Ok(false) => Check::failed(
             "sandbox image",
-            format!(
-                "{} is not built; run `cyber-sandbox image build`",
-                cli::DEFAULT_IMAGE
-            ),
+            format!("{reference} is not built; run `cyber-sandbox image build`"),
         ),
         Err(error) => Check::failed("sandbox image", error.to_string()),
     }

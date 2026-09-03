@@ -11,13 +11,14 @@ mod dns;
 mod error;
 mod http;
 mod nflog;
+mod peer;
 mod redirect;
 mod stream;
 mod tcp;
 mod tls;
 
 use std::{
-    net::{IpAddr, SocketAddr},
+    net::{IpAddr, Ipv4Addr, SocketAddr},
     path::PathBuf,
     sync::Arc,
 };
@@ -124,10 +125,18 @@ async fn serve(arguments: Serve) -> anyhow::Result<()> {
     );
     let bridge = Arc::new(TlsBridge::new(authority));
 
-    let proxy = TcpListener::bind(("0.0.0.0", arguments.proxy_port))
+    // Both sockets bind the loopback address rather than a wildcard, because that is the
+    // address the packet filter's redirection rewrites the sandbox's traffic to. It also
+    // has to be the address replies leave from: a wildcard-bound socket would answer a
+    // redirected DNS query from the sandbox's own interface address, conntrack would not
+    // recognise that as the reply to what it redirected, and the resolver's answer would
+    // never be translated back to the address the client asked. Binding the loopback
+    // address makes the reply's source correct by construction, and keeps the gateway
+    // unreachable from anywhere but inside this sandbox.
+    let proxy = TcpListener::bind((Ipv4Addr::LOCALHOST, arguments.proxy_port))
         .await
         .context("binding the transparent proxy port")?;
-    let resolver = UdpSocket::bind(("0.0.0.0", arguments.dns_port))
+    let resolver = UdpSocket::bind((Ipv4Addr::LOCALHOST, arguments.dns_port))
         .await
         .context("binding the intercepting resolver port")?;
     let upstream = SocketAddr::new(arguments.upstream_resolver, 53);

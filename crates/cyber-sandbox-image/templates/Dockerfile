@@ -6,6 +6,49 @@ COPY crates ./crates
 RUN cargo build --release --locked -p cyber-sandbox-gateway \
  && strip target/release/cyber-sandbox-gateway
 
+{%- if let Some(openssh) = openssh %}
+
+# Rosetta cannot install a seccomp filter — `prctl(PR_SET_SECCOMP)` returns EINVAL in a
+# translated guest — and Kali's sshd is compiled with the seccomp_filter privilege
+# separation sandbox. Its preauth child dies on that call and every connection is reset
+# before key exchange finishes. The mechanism is a configure-time choice with no
+# sshd_config keyword, so the only sshd that can serve a translated guest is one built
+# against a different one. The same base image is used, so the result links against the
+# glibc and PAM the final stage actually has.
+FROM {{ base_image }} AS sshd
+ENV DEBIAN_FRONTEND=noninteractive
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends \
+      build-essential ca-certificates curl libcrypt-dev libpam0g-dev libssl-dev zlib1g-dev \
+ && apt-get clean \
+ && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /src
+# The checksum is pinned, so a mirror serving a different tarball fails the build here
+# rather than putting an unreviewed sshd in front of the sandbox.
+RUN curl -fsSLo openssh.tar.gz \
+      https://cdn.openbsd.org/pub/OpenBSD/OpenSSH/portable/openssh-{{ openssh.version() }}.tar.gz \
+ && printf '%s  openssh.tar.gz\n' '{{ openssh.sha256() }}' | sha256sum --check --strict \
+ && tar -xzf openssh.tar.gz --strip-components=1 \
+ && rm openssh.tar.gz
+
+# Rosetta supports neither of the two mechanisms Linux offers: `rlimit` confines the
+# preauth child by zeroing RLIMIT_FSIZE and RLIMIT_NOFILE, and configure refuses to
+# enable it because `select` no longer works afterwards under translation. What is given
+# up is a layer around the preauth child, not privilege separation — it still runs as an
+# unprivileged chrooted account — and it is the layer this design leans on least, since
+# the boundary here is the virtual machine.
+# `install-nosysconf` installs the binaries and nothing under /etc/ssh, which is what
+# keeps Kali's own sshd_config — and the `Include sshd_config.d/*.conf` line the drop-in
+# depends on — intact in the final image. The libexec path matches Debian's layout,
+# because sshd resolves its helpers by a path compiled into it.
+RUN ./configure --prefix=/usr --sysconfdir=/etc/ssh --libexecdir=/usr/lib/openssh \
+      --with-privsep-path=/run/sshd --with-pam --with-sandbox={{ openssh.sandbox() }} \
+ && make -j"$(nproc)" \
+ && make install-nosysconf DESTDIR=/out \
+ && /out/usr/sbin/sshd -V 2>&1 | grep -q 'OpenSSH_{{ openssh.version() }}'
+{%- endif %}
+
 FROM {{ base_image }}
 ENV DEBIAN_FRONTEND=noninteractive
 ENV LANG=C.UTF-8
@@ -47,6 +90,18 @@ RUN chown root:{{ gateway_user }} /usr/local/bin/cyber-sandbox-gateway \
  && chmod 0050 /usr/local/bin/cyber-sandbox-gateway \
  && setcap cap_net_admin+ep /usr/local/bin/cyber-sandbox-gateway \
  && getcap /usr/local/bin/cyber-sandbox-gateway | grep -q cap_net_admin
+
+{%- if let Some(openssh) = openssh %}
+
+# Take the packaged sshd out of the way of the rlimit-sandboxed build. All three binaries
+# of the privilege separation chain come from the same source tree — sshd execs
+# sshd-session, which execs sshd-auth, and a version mismatch between them is fatal at
+# connection time. The configuration files are deliberately left to Kali's package.
+COPY --from=sshd /out/usr/sbin/sshd /usr/sbin/sshd
+COPY --from=sshd /out/usr/lib/openssh/sshd-session /usr/lib/openssh/sshd-session
+COPY --from=sshd /out/usr/lib/openssh/sshd-auth /usr/lib/openssh/sshd-auth
+RUN /usr/sbin/sshd -V 2>&1 | grep -q 'OpenSSH_{{ openssh.version() }}'
+{%- endif %}
 
 COPY entrypoint.sh /usr/local/bin/cyber-sandbox-entrypoint
 COPY egress-policy.sh /usr/local/lib/cyber-sandbox/egress-policy.sh

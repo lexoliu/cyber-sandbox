@@ -13,6 +13,7 @@ use tokio::{net::UdpSocket, time::Duration};
 use crate::{
     audit::AuditSink,
     error::{GatewayError, Result},
+    peer::{Udp, owner_of},
 };
 
 /// Largest DNS message the gateway relays; anything larger belongs on TCP.
@@ -56,6 +57,11 @@ async fn resolve(
     sink: AuditSink,
 ) -> Result<()> {
     let started = Instant::now();
+    // Attributed before anything is forwarded, while the querying socket is still bound.
+    let SocketAddr::V4(source) = client else {
+        return Err(GatewayError::NotIpv4 { peer: client });
+    };
+    let sink = sink.attributed_to(owner_of::<Udp>(source).await?);
     let outbound =
         UdpSocket::bind(("0.0.0.0", 0))
             .await

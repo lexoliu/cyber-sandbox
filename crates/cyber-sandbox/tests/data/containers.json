@@ -1,0 +1,51 @@
+[
+  {
+    "configuration": {
+      "image": {
+        "reference": "localhost/cyber-sandbox:amd64"
+      },
+      "platform": {
+        "architecture": "amd64",
+        "os": "linux"
+      },
+      "resources": {
+        "cpus": 2,
+        "memoryInBytes": 4294967296
+      },
+      "rosetta": true
+    },
+    "id": "live",
+    "status": {
+      "networks": [
+        {
+          "hostname": "live",
+          "ipv4Address": "192.168.65.29/24",
+          "ipv4Gateway": "192.168.65.1",
+          "network": "default"
+        }
+      ],
+      "state": "running"
+    }
+  },
+  {
+    "configuration": {
+      "image": {
+        "reference": "localhost/cyber-sandbox:latest"
+      },
+      "platform": {
+        "architecture": "arm64",
+        "os": "linux"
+      },
+      "resources": {
+        "cpus": 5,
+        "memoryInBytes": 12884901888
+      },
+      "rosetta": false
+    },
+    "id": "halted",
+    "status": {
+      "networks": [],
+      "state": "stopped"
+    }
+  }
+]

@@ -53,6 +53,7 @@ nix = { version = "0.30", features = ["net", "socket"] }
 rcgen = { version = "0.14", default-features = false, features = ["pem", "ring", "x509-parser"] }
 rustls = { version = "0.23", default-features = false, features = ["logging", "ring", "std", "tls12"] }
 sha2 = "0.10"
+sysinfo = { version = "0.39", default-features = false, features = ["disk", "system"] }
 ssh-key = { version = "0.6", default-features = false, features = ["ed25519", "getrandom", "rand_core", "std"] }
 tempfile = "3"
 tokio-rustls = { version = "0.26", default-features = false, features = ["logging", "ring", "tls12"] }

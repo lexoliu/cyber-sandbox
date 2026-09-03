@@ -7,13 +7,17 @@
 //! carrying the runtime's own stderr rather than a silent fallback.
 
 mod apple;
+mod budget;
 mod error;
 mod inspect;
 mod spec;
 
 pub use apple::{AppleContainer, ExecOutput, ExecStream, ImageBuild};
+pub use budget::{Build, Committed, HostBudget, Reservation, Sandbox, Workload};
 pub use error::RuntimeError;
-pub use inspect::{ContainerState, NetworkStatus, RunState, SystemStatus};
+pub use inspect::{
+    ContainerState, ImageDescription, NetworkStatus, Resources, RunState, SystemStatus,
+};
 pub use spec::{
     Arch, Capability, ContainerName, ContainerSpec, Cpus, ImageReference, Memory, Mount,
     PublishedSocket, UserSpec,

@@ -1,9 +1,12 @@
-use std::path::{Path, PathBuf};
+use std::{
+    net::Ipv4Addr,
+    path::{Path, PathBuf},
+};
 
 use anyhow::{Context as _, Result, bail};
 use cyber_sandbox_agents::{AgentIntegration, key_directory};
 use cyber_sandbox_image::SandboxLayout;
-use cyber_sandbox_runtime::{AppleContainer, ContainerName};
+use cyber_sandbox_runtime::{AppleContainer, Committed, ContainerName, HostBudget, RunState};
 
 use crate::record::SandboxRecord;
 
@@ -46,6 +49,34 @@ impl Host {
         &self.runtime
     }
 
+    /// Measures what the host can spare, against the volume the runtime stores images
+    /// and VM disks on.
+    ///
+    /// That volume is the one that matters: it is where a build's layer snapshots and a
+    /// sandbox's writes land, and filling it is what stops macOS growing a swapfile.
+    ///
+    /// Every virtual machine the runtime is already running is charged against the
+    /// measurement, so a second sandbox is sized against the host as it is rather than as
+    /// it was before the first one started.
+    ///
+    /// # Errors
+    /// Fails when the runtime cannot report where its state lives or what it is running,
+    /// or when the host's cores, memory or free space cannot be measured.
+    pub async fn budget(&self) -> Result<HostBudget> {
+        let status = self
+            .runtime
+            .system_status()
+            .await
+            .context("asking the runtime where it stores its state")?;
+        let running = self
+            .runtime
+            .list()
+            .await
+            .context("asking the runtime what it is already running")?;
+        HostBudget::measure(Path::new(&status.app_root), Committed::of(&running))
+            .map_err(Into::into)
+    }
+
     /// The layout the sandbox image was rendered from.
     #[must_use]
     pub fn layout(&self) -> &SandboxLayout {
@@ -68,6 +99,26 @@ impl Host {
     #[must_use]
     pub fn build_directory(&self) -> PathBuf {
         self.state.join("build")
+    }
+
+    /// The address the sandbox is answering on right now.
+    ///
+    /// # Errors
+    /// Fails when the runtime does not know the container, or knows it but is not running
+    /// it. Neither case has an address to offer: the one it had on its last run belongs to
+    /// whatever holds that address now, not to this sandbox.
+    pub async fn address_of(&self, name: &ContainerName) -> Result<Ipv4Addr> {
+        let state = self
+            .runtime()
+            .inspect(name)
+            .await
+            .with_context(|| format!("looking up `{name}`"))?;
+        if state.status.state != RunState::Running {
+            bail!("`{name}` is not running; start it with `cyber-sandbox up {name}`");
+        }
+        state
+            .ipv4_address()
+            .with_context(|| format!("`{name}` is running but has not been given an address yet"))
     }
 
     /// Path of the record describing `id`.

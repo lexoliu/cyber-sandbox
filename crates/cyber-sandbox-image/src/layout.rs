@@ -47,15 +47,20 @@ pub struct SandboxLayout {
 impl Default for SandboxLayout {
     fn default() -> Self {
         Self {
+            // Both ids sit in 65000-65533, the band Debian policy reserves and never
+            // allocates dynamically, so a base image cannot already hold an account
+            // that collides with them. The gateway's id in particular is load-bearing:
+            // the packet filter tells its traffic apart from the researcher's by uid
+            // alone, so it has to be a constant the image and the policy agree on.
             researcher: Account {
                 name: "researcher".to_owned(),
-                uid: 1000,
-                gid: 1000,
+                uid: 65002,
+                gid: 65002,
             },
             gateway: Account {
                 name: "gateway".to_owned(),
-                uid: 999,
-                gid: 999,
+                uid: 65001,
+                gid: 65001,
             },
             proxy_port: 15000,
             dns_port: 15353,

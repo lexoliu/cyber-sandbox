@@ -8,9 +8,20 @@ AuthorizedKeysFile {{ authorized_keys }}
 AllowUsers {{ researcher_user }}
 X11Forwarding no
 AllowAgentForwarding no
-AllowTcpForwarding no
 # `claude ssh` carries the model API back to the host over a remote-forwarded unix
-# socket, so remote stream-local forwarding is the one forwarding mode that stays on.
+# socket, so remote forwarding is the one forwarding direction that stays on. Both
+# keywords are needed for it: sshd gates a remote stream-local forward on the *TCP*
+# remote permission as well, because `AllowTcpForwarding` is what
+# `channel_disable_admin(ssh, FORWARD_REMOTE)` is derived from in session.c, and the
+# socket request is then refused by the same admin check that refuses a TCP one. With
+# `AllowTcpForwarding no` the socket is denied however this next line is set.
+#
+# Widening it to `remote` costs nothing here. Every forward is opened by the client, and
+# the client is the host that holds the keys; the sandbox cannot ask for one. A remote
+# forward only lets the host publish one of its own endpoints inside the sandbox, which
+# is exactly what the agent socket is. Local forwarding stays off, so the host cannot
+# use the sandbox to originate connections either.
+AllowTcpForwarding remote
 AllowStreamLocalForwarding remote
 PermitTunnel no
 PrintMotd no

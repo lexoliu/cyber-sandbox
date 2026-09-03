@@ -1,15 +1,27 @@
 [
   {
     "configuration": {
-      "capAdd": ["ALL"],
+      "capAdd": [
+        "ALL"
+      ],
       "capDrop": [],
       "creationDate": "2026-09-03T03:46:17Z",
       "id": "cs-probe",
-      "platform": { "architecture": "arm64", "os": "linux" },
+      "image": {
+        "reference": "localhost/cyber-sandbox:latest"
+      },
+      "platform": {
+        "architecture": "arm64",
+        "os": "linux"
+      },
       "publishedPorts": [],
       "publishedSockets": [],
       "readOnly": false,
-      "resources": { "cpuOverhead": 1, "cpus": 4, "memoryInBytes": 1073741824 },
+      "resources": {
+        "cpuOverhead": 1,
+        "cpus": 4,
+        "memoryInBytes": 1073741824
+      },
       "rosetta": false,
       "runtimeHandler": "container-runtime-linux",
       "ssh": false,
@@ -32,6 +44,41 @@
       ],
       "startedDate": "2026-09-03T03:46:20Z",
       "state": "running"
+    }
+  },
+  {
+    "configuration": {
+      "capAdd": [
+        "ALL"
+      ],
+      "capDrop": [],
+      "creationDate": "2026-09-03T03:46:17Z",
+      "id": "cs-stopped",
+      "image": {
+        "reference": "localhost/cyber-sandbox:latest"
+      },
+      "platform": {
+        "architecture": "arm64",
+        "os": "linux"
+      },
+      "publishedPorts": [],
+      "publishedSockets": [],
+      "readOnly": false,
+      "resources": {
+        "cpuOverhead": 1,
+        "cpus": 8,
+        "memoryInBytes": 8589934592
+      },
+      "rosetta": false,
+      "runtimeHandler": "container-runtime-linux",
+      "ssh": false,
+      "useInit": false,
+      "virtualization": false
+    },
+    "id": "cs-stopped",
+    "status": {
+      "networks": [],
+      "state": "stopped"
     }
   }
 ]
