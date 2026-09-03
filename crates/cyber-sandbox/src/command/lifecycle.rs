@@ -279,10 +279,14 @@ fn ensure_unchanged(
     Ok(())
 }
 
-/// Stops a sandbox without destroying it.
+/// Stops a sandbox without destroying it, and takes it out of both agents' pickers.
+///
+/// Everything the machine was given at creation survives — its identity, its samples,
+/// its disk — so `up` brings the same sandbox back. Only its reachability goes.
 ///
 /// # Errors
-/// Fails when no such sandbox is known or the runtime cannot stop it.
+/// Fails when no such sandbox is known, the runtime cannot stop it, or the agents'
+/// configuration cannot be written.
 pub async fn down(host: &Host, arguments: &cli::Target) -> Result<()> {
     let record = host.record(&arguments.id).await?;
     let name = Host::container_name(&record.id)?;
@@ -290,6 +294,14 @@ pub async fn down(host: &Host, arguments: &cli::Target) -> Result<()> {
         .stop(&name)
         .await
         .context("stopping the sandbox")?;
+    // The registration names the address the machine had, and a stopped machine has
+    // none: leaving it in place offers both agents a sandbox that cannot answer, at an
+    // address vmnet is free to give to a different one. `up` writes the registration
+    // afresh on every start, so taking it away here costs nothing but a restart.
+    host.agents()
+        .unregister(&record.id)
+        .await
+        .context("unregistering the sandbox from the host's agents")?;
     tracing::info!(sandbox = record.id, "stopped");
     Ok(())
 }
