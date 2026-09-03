@@ -22,6 +22,13 @@ use crate::{endpoint::SandboxEndpoint, error::AgentError, write_file};
 const ENVIRONMENTS: &str = "environments";
 
 /// The remote program the sandbox runs, speaking the exec-server protocol over stdio.
+///
+/// Nothing more is needed to make the server die with the session: in `stdio` mode the
+/// pipes *are* the transport, so sshd closing them at disconnect is end of input and the
+/// server exits. `--exit-on-stdin-close` is for the `--remote` mode, where the transport
+/// is a socket and the pipe is only a lifetime signal — codex 0.153.0 makes
+/// `--environment-id` and `--remote` required as soon as it is passed, so adding it here
+/// breaks the connection outright.
 const REMOTE_COMMAND: &[&str] = &["codex", "exec-server", "--listen", "stdio"];
 
 /// Codex's environments file, edited in place.

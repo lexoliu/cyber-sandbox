@@ -9,9 +9,12 @@
 Both agents keep their credentials on this host and reach the sandbox over SSH, so
 nothing inside it ever holds a token.
 
-  claude     claude ssh {{ id }}
   codex      /environment, then pick {{ id }}
   shell      cyber-sandbox ssh {{ id }}
+
+Claude Code is registered as the SSH connection `{{ id }}`. The installed release does
+not carry the `ssh` subcommand that opens one yet, so until it does, drive the sandbox
+from codex or a shell.
 
 Every packet the sandbox sends is audited or refused. Watch it with:
 
