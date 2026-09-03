@@ -8,8 +8,8 @@ use std::{
 use anyhow::{Context as _, Result, bail};
 use askama::Template;
 use cyber_sandbox_runtime::{
-    Capability, ContainerName, ContainerSpec, Cpus, HostBudget, ImageReference, Memory, Mount,
-    Reservation, RunState, Sandbox,
+    Capability, ContainerName, ContainerSpec, ContainerState, Cpus, HostBudget, ImageReference,
+    Memory, Mount, Reservation, RunState, Sandbox,
 };
 use jiff::Timestamp;
 
@@ -216,33 +216,47 @@ pub async fn ls(host: &Host) -> Result<()> {
         .await
         .context("listing the runtime's containers")?;
 
-    let sandboxes = records
+    let listing = Listing {
+        sandboxes: rows(records, &live),
+    }
+    .render()
+    .context("rendering the sandbox listing")?;
+    std::io::stdout()
+        .lock()
+        .write_all(listing.as_bytes())
+        .context("writing the sandbox listing")
+}
+
+/// Joins what the host recorded with what the runtime currently reports.
+///
+/// The address comes from the runtime rather than the record, because a container that
+/// has been stopped and started again is on a different address, and one that is merely
+/// stopped is on none at all: printing the recorded address for either would offer an
+/// endpoint that nothing is listening on.
+fn rows(records: Vec<SandboxRecord>, live: &[ContainerState]) -> Vec<Row> {
+    records
         .into_iter()
         .map(|record| {
-            let state = live
+            let container = live
                 .iter()
-                .find(|container| container.id.as_str() == record.id)
-                .map(|container| run_state(container.status.state));
+                .find(|container| container.id.as_str() == record.id);
             Row {
-                address: match state {
-                    Some(_) => format!("{}:{}", record.address, record.ssh_port),
-                    None => "-".to_owned(),
-                },
-                state: state.unwrap_or("gone").to_owned(),
+                address: container
+                    .filter(|container| container.status.state == RunState::Running)
+                    .and_then(ContainerState::ipv4_address)
+                    .map_or_else(
+                        || "-".to_owned(),
+                        |address| format!("{address}:{}", record.ssh_port),
+                    ),
+                state: container
+                    .map_or("gone", |container| run_state(container.status.state))
+                    .to_owned(),
                 arch: record.arch.to_string(),
                 image: record.image.to_string(),
                 id: record.id,
             }
         })
-        .collect();
-
-    let listing = Listing { sandboxes }
-        .render()
-        .context("rendering the sandbox listing")?;
-    std::io::stdout()
-        .lock()
-        .write_all(listing.as_bytes())
-        .context("writing the sandbox listing")
+        .collect()
 }
 
 const fn run_state(state: RunState) -> &'static str {
@@ -383,4 +397,71 @@ async fn accepts(address: SocketAddr) -> bool {
         tokio::time::timeout(READY_INTERVAL, tokio::net::TcpStream::connect(address)).await,
         Ok(Ok(_))
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use std::net::Ipv4Addr;
+
+    use cyber_sandbox_runtime::Arch;
+
+    use super::*;
+
+    /// Two containers as the runtime reports them: one running with an address, one
+    /// stopped with none.
+    fn live() -> Vec<ContainerState> {
+        serde_json::from_str(include_str!("../../tests/data/containers.json")).unwrap()
+    }
+
+    fn record(id: &str, address: Ipv4Addr) -> SandboxRecord {
+        SandboxRecord {
+            id: id.to_owned(),
+            image: ImageReference::new("localhost/cyber-sandbox:latest").unwrap(),
+            arch: Arch::Arm64,
+            address,
+            ssh_port: 22,
+            researcher: "researcher".to_owned(),
+            work_dir: PathBuf::from("/work"),
+            samples: None,
+            identity_file: PathBuf::from("/keys/id"),
+            started_at: Timestamp::now(),
+        }
+    }
+
+    #[test]
+    fn a_stopped_sandbox_offers_no_address() {
+        let rows = rows(
+            vec![record("halted", Ipv4Addr::new(192, 168, 65, 15))],
+            &live(),
+        );
+        assert_eq!(rows[0].state, "stopped");
+        assert_eq!(
+            rows[0].address, "-",
+            "nothing is listening on the address it last had, so offering it would hand \
+             out an endpoint that cannot be reached"
+        );
+    }
+
+    #[test]
+    fn a_running_sandbox_reports_the_address_it_has_now() {
+        let rows = rows(
+            vec![record("live", Ipv4Addr::new(192, 168, 65, 15))],
+            &live(),
+        );
+        assert_eq!(
+            rows[0].address, "192.168.65.29:22",
+            "the runtime is the authority: a container that has been restarted is on a \
+             different address than the one the host recorded"
+        );
+    }
+
+    #[test]
+    fn a_sandbox_the_runtime_has_forgotten_is_reported_as_gone() {
+        let rows = rows(
+            vec![record("vanished", Ipv4Addr::new(192, 168, 65, 15))],
+            &live(),
+        );
+        assert_eq!(rows[0].state, "gone");
+        assert_eq!(rows[0].address, "-");
+    }
 }
