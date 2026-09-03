@@ -6,11 +6,13 @@
 //! in one place cannot silently disagree with another.
 
 mod layout;
+mod openssh;
 mod profile;
 mod render;
 mod stage;
 
 pub use layout::{Account, SandboxLayout};
+pub use openssh::OpenSshBuild;
 pub use profile::{ToolProfile, UnknownProfile};
 pub use render::RenderedImage;
 pub use stage::{BuildContext, StageError};

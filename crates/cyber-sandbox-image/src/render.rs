@@ -1,6 +1,7 @@
 use askama::Template;
+use cyber_sandbox_runtime::Arch;
 
-use crate::{layout::SandboxLayout, profile::ToolProfile};
+use crate::{layout::SandboxLayout, openssh::OpenSshBuild, profile::ToolProfile};
 
 /// The image definition itself.
 #[derive(Debug, Template)]
@@ -32,6 +33,9 @@ pub struct Dockerfile {
     pub work_dir: String,
     /// npm packages providing the agents' in-sandbox tool side.
     pub agent_packages: String,
+    /// The OpenSSH release this image compiles its own sshd from, where the packaged one
+    /// cannot serve the guest.
+    pub openssh: Option<OpenSshBuild>,
 }
 
 /// The packet filter policy applied before `CAP_NET_ADMIN` is dropped.
@@ -96,13 +100,14 @@ pub struct RenderedImage {
 }
 
 impl RenderedImage {
-    /// Renders every generated file from one layout and profile.
+    /// Renders every generated file from one layout, architecture and profile.
     ///
     /// # Errors
     /// Fails only when a template is malformed, which the compiler already rejects, or
     /// when rendering runs out of memory.
     pub fn render(
         base_image: &str,
+        arch: Arch,
         profile: ToolProfile,
         layout: &SandboxLayout,
     ) -> Result<Self, askama::Error> {
@@ -120,6 +125,7 @@ impl RenderedImage {
             samples_dir: layout.samples_dir.display().to_string(),
             work_dir: layout.work_dir.display().to_string(),
             agent_packages: crate::profile::AGENT_PACKAGES.join(" "),
+            openssh: OpenSshBuild::required_for(arch),
         }
         .render()?;
         let egress_policy = EgressPolicy {
@@ -159,13 +165,18 @@ impl RenderedImage {
 mod tests {
     use super::*;
 
-    fn rendered() -> RenderedImage {
+    fn for_arch(arch: Arch) -> RenderedImage {
         RenderedImage::render(
             "docker.io/kalilinux/kali-rolling:latest",
+            arch,
             ToolProfile::Core,
             &SandboxLayout::default(),
         )
         .unwrap()
+    }
+
+    fn rendered() -> RenderedImage {
+        for_arch(Arch::Arm64)
     }
 
     #[test]
@@ -287,5 +298,62 @@ mod tests {
         assert!(config.contains("AllowTcpForwarding no"));
         assert!(config.contains("PermitRootLogin no"));
         assert!(config.contains("PasswordAuthentication no"));
+    }
+
+    #[test]
+    fn a_native_image_keeps_the_packaged_sshd() {
+        let dockerfile = for_arch(Arch::Arm64).dockerfile;
+        assert!(
+            !dockerfile.contains("AS sshd"),
+            "the packaged sshd's seccomp sandbox works natively, and is the stronger one, \
+             so nothing is compiled: {dockerfile}"
+        );
+        assert!(!dockerfile.contains("--with-sandbox"));
+    }
+
+    #[test]
+    fn a_translated_image_compiles_an_sshd_that_can_enter_its_own_sandbox() {
+        let build = OpenSshBuild::required_for(Arch::Amd64).unwrap();
+        let dockerfile = for_arch(Arch::Amd64).dockerfile;
+        assert!(
+            dockerfile.contains(&format!("--with-sandbox={}", build.sandbox())),
+            "the mechanism is a configure-time choice with no sshd_config keyword, so it \
+             has to be written here or the packaged sshd's seccomp filter is what runs: \
+             {dockerfile}"
+        );
+        assert!(
+            dockerfile.contains(&format!(
+                "openssh-{}.tar.gz",
+                build.version()
+            )) && dockerfile.contains(build.sha256()),
+            "the release is pinned by version and checksum"
+        );
+        assert!(
+            dockerfile.contains("sha256sum --check --strict"),
+            "an unpinned tarball must fail the build, not reach the sandbox"
+        );
+    }
+
+    #[test]
+    fn the_compiled_sshd_replaces_every_binary_of_the_privilege_separation_chain() {
+        let dockerfile = for_arch(Arch::Amd64).dockerfile;
+        for binary in [
+            "COPY --from=sshd /out/usr/sbin/sshd /usr/sbin/sshd",
+            "COPY --from=sshd /out/usr/lib/openssh/sshd-session /usr/lib/openssh/sshd-session",
+            "COPY --from=sshd /out/usr/lib/openssh/sshd-auth /usr/lib/openssh/sshd-auth",
+        ] {
+            assert!(dockerfile.contains(binary), "missing {binary}");
+        }
+        assert!(
+            !dockerfile.contains("/out/etc"),
+            "the configuration files stay Kali's: our drop-in is only read because \
+             its sshd_config carries the include that reads it"
+        );
+        let install_at = dockerfile.find("apt-get install").unwrap();
+        let copy_at = dockerfile.find("COPY --from=sshd").unwrap();
+        assert!(
+            install_at < copy_at,
+            "the copy has to land after the package that ships the binaries it replaces"
+        );
     }
 }

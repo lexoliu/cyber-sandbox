@@ -54,7 +54,7 @@ impl BuildContext {
         layout: &SandboxLayout,
     ) -> Result<Self, StageError> {
         let directory = directory.into();
-        let rendered = RenderedImage::render(base_image, profile, layout)?;
+        let rendered = RenderedImage::render(base_image, arch, profile, layout)?;
 
         remove_dir_all_if_present(&directory).await?;
         create_dir_all(&directory).await?;
