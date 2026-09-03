@@ -144,15 +144,13 @@ async fn report(attributes: &[PacketNla], sink: &AuditSink) {
     let Some(destination) = destination_of(&headers) else {
         return;
     };
-    sink.record_as(
-        uid,
-        AuditEvent::Blocked(Blocked {
+    sink.attributed_to(uid)
+        .record(AuditEvent::Blocked(Blocked {
             transport: transport_of(&headers),
             destination,
             reason: BlockReason::UnauditableTransport,
-        }),
-    )
-    .await;
+        }))
+        .await;
 }
 
 fn destination_of(headers: &PacketHeaders<'_>) -> Option<Endpoint> {

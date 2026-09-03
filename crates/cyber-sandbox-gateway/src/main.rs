@@ -11,6 +11,7 @@ mod dns;
 mod error;
 mod http;
 mod nflog;
+mod peer;
 mod redirect;
 mod stream;
 mod tcp;

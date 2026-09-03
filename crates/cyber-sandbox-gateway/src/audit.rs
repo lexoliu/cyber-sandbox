@@ -1,4 +1,4 @@
-use std::path::Path;
+use std::{path::Path, sync::Arc};
 
 use cyber_sandbox_audit::{AuditEvent, AuditRecord, AuditWriter};
 use jiff::Timestamp;
@@ -19,25 +19,32 @@ const QUEUE_DEPTH: usize = 1024;
 /// reaches it through this channel, so no lock is ever taken on the file.
 #[derive(Debug, Clone)]
 pub struct AuditSink {
-    sandbox: String,
+    sandbox: Arc<str>,
+    uid: Option<u32>,
     records: mpsc::Sender<AuditRecord>,
 }
 
 impl AuditSink {
-    /// Appends one event to the trail, waiting if the writer is behind.
-    pub async fn record(&self, event: AuditEvent) {
-        self.record_as(None, event).await;
+    /// The same trail, with every record written through it naming `uid`.
+    ///
+    /// Attribution belongs to a connection rather than to an event, so it is fixed once —
+    /// where the account is still recoverable — and carried by the handle the tasks
+    /// serving that connection already pass around.
+    #[must_use]
+    pub fn attributed_to(&self, uid: Option<u32>) -> Self {
+        Self {
+            sandbox: Arc::clone(&self.sandbox),
+            uid,
+            records: self.records.clone(),
+        }
     }
 
-    /// Appends one event attributed to the uid that produced it.
-    ///
-    /// Only the packet filter knows which account a refused packet came from, so this is
-    /// the one path that can name it.
-    pub async fn record_as(&self, uid: Option<u32>, event: AuditEvent) {
+    /// Appends one event to the trail, waiting if the writer is behind.
+    pub async fn record(&self, event: AuditEvent) {
         let record = AuditRecord {
             at: Timestamp::now(),
-            sandbox: self.sandbox.clone(),
-            uid,
+            sandbox: self.sandbox.to_string(),
+            uid: self.uid,
             event,
         };
         if self.records.send(record).await.is_err() {
@@ -64,7 +71,8 @@ pub async fn spawn(sandbox: &str, trail: &Path) -> Result<(AuditSink, JoinHandle
     });
     Ok((
         AuditSink {
-            sandbox: sandbox.to_owned(),
+            sandbox: Arc::from(sandbox),
+            uid: None,
             records,
         },
         task,
