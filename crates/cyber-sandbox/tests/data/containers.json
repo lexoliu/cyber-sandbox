@@ -14,11 +14,11 @@
       },
       "rosetta": true
     },
-    "id": "live",
+    "id": "c0ffee",
     "status": {
       "networks": [
         {
-          "hostname": "live",
+          "hostname": "c0ffee",
           "ipv4Address": "192.168.65.29/24",
           "ipv4Gateway": "192.168.65.1",
           "network": "default"
@@ -42,7 +42,7 @@
       },
       "rosetta": false
     },
-    "id": "halted",
+    "id": "dec0de",
     "status": {
       "networks": [],
       "state": "stopped"

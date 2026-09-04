@@ -2,17 +2,19 @@
 
 Isolated, fully audited security-research environments on macOS.
 
-Each sandbox is one lightweight virtual machine started through
+Each session is one lightweight virtual machine started through
 [`apple/container`](https://github.com/apple/container). Inside it: a Kali headless
 toolchain for analysing samples. Outside it: your credentials, which never cross the
 boundary.
 
+You never start, stop, list or delete a machine. You open a session; the machine under it
+is created when you need one, resumed when you come back to it, and reclaimed once it has
+gone a week untouched or the host runs short of disk.
+
 ## What it guarantees
 
-**No credential ever enters the sandbox.** Claude Code and Codex both keep their model
-side — and their tokens — on the host, and run only their tool side inside the sandbox
-over SSH. The sandbox needs no egress at all to be usable as a research environment, and
-holds nothing worth stealing.
+**No credential ever enters the sandbox.** Nothing inside a session holds a token, so a
+sample that reads every file it can reach still finds none.
 
 **No packet leaves unaudited.** Traffic is redirected by uid to an in-guest gateway that
 terminates TLS with its own authority and records every DNS question, connection, TLS
@@ -22,24 +24,21 @@ process before anything else runs, and `CAP_NET_ADMIN` is removed from the bound
 afterwards, so code inside the sandbox cannot change it even as root. If the gateway
 dies, the redirect target stops listening and egress fails closed.
 
-Model-API traffic is deliberately outside this trail: it never traverses the sandbox's
-network stack in the first place, travelling instead over the agents' SSH channel to the
-host. What the audit records is everything the *sample* and the agents' *tools* do.
-
 ## Use
 
 ```sh
-cyber-sandbox doctor --fix          # check the host, start the runtime
-cyber-sandbox image build           # build the Kali + gateway image
-cyber-sandbox up lab --samples ~/samples
-cyber-sandbox shell lab             # a shell in the sandbox
-codex                               # /environment, then pick lab
-cyber-sandbox audit tail lab -f     # watch every packet it sends
-cyber-sandbox rm lab
+cyber-sandbox shell --samples ~/samples   # a new session, with samples mounted read-only
+cyber-sandbox audit c0ffee                # follow every packet that session sends
+cyber-sandbox shell --resume              # pick a session to come back to
+cyber-sandbox shell --resume c0ffee       # or name it
 ```
 
+The first run builds the Kali image with the gateway compiled into it, from the checkout
+you run it in. Every run after that starts in seconds.
+
 `--arch amd64` runs an x86_64 root filesystem under Rosetta, for samples that are not
-arm64.
+arm64. It is settled when the session is created, so an `amd64` sample gets its own
+session rather than a flag on an existing one.
 
 ## Layout
 
@@ -50,7 +49,7 @@ arm64.
 | `cyber-sandbox-image` | Renders the Dockerfile, entrypoint and egress policy |
 | `cyber-sandbox-gateway` | The in-guest auditing proxy (Linux only) |
 | `cyber-sandbox-audit` | Audit record schema and JSONL reader/writer |
-| `cyber-sandbox-agents` | Registers a sandbox with Claude Code and Codex |
+| `cyber-sandbox-agents` | Registers a session with Claude Code and Codex |
 
 ## Requirements
 

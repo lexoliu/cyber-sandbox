@@ -1,9 +1,0 @@
-{% for check in checks -%}
-{{ check.name|fmt("{:<18}") }}{{ check.status|fmt("{:<10}") }}{{ check.detail }}
-{% endfor %}
-{%- if ready %}
-The host is ready to run sandboxes.
-{%- else %}
-The host cannot run sandboxes yet. Fix the failing checks above{% if !fix %}, or re-run with `--fix`{% endif %}.
-{%- endif %}
-

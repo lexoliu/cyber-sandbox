@@ -1,4 +1,5 @@
 use std::{
+    cmp::Reverse,
     net::Ipv4Addr,
     path::{Path, PathBuf},
 };
@@ -8,7 +9,7 @@ use cyber_sandbox_agents::{AgentIntegration, key_directory, known_hosts_director
 use cyber_sandbox_image::SandboxLayout;
 use cyber_sandbox_runtime::{AppleContainer, Committed, ContainerName, HostBudget, RunState};
 
-use crate::record::SandboxRecord;
+use crate::session::{SessionId, SessionRecord};
 
 /// Directory under the user's home holding everything cyber-sandbox owns.
 const STATE_DIRECTORY: &str = ".cyber-sandbox";
@@ -56,7 +57,7 @@ impl Host {
     /// sandbox's writes land, and filling it is what stops macOS growing a swapfile.
     ///
     /// Every virtual machine the runtime is already running is charged against the
-    /// measurement, so a second sandbox is sized against the host as it is rather than as
+    /// measurement, so a second session is sized against the host as it is rather than as
     /// it was before the first one started.
     ///
     /// # Errors
@@ -89,7 +90,7 @@ impl Host {
         AgentIntegration::for_home(&self.home)
     }
 
-    /// Directory holding the per-sandbox SSH identities.
+    /// Directory holding the per-session SSH identities.
     #[must_use]
     pub fn key_directory(&self) -> PathBuf {
         key_directory(&self.home)
@@ -102,8 +103,8 @@ impl Host {
     ///
     /// # Errors
     /// Fails when the directory cannot be created.
-    pub async fn known_hosts_of(&self, id: &str) -> Result<PathBuf> {
-        let path = known_hosts_directory(&self.home).join(id);
+    pub async fn known_hosts_of(&self, id: &SessionId) -> Result<PathBuf> {
+        let path = known_hosts_directory(&self.home).join(id.as_str());
         create_parent(&path).await?;
         Ok(path)
     }
@@ -114,12 +115,12 @@ impl Host {
         self.state.join("build")
     }
 
-    /// The address the sandbox is answering on right now.
+    /// The address the session's machine is answering on right now.
     ///
     /// # Errors
     /// Fails when the runtime does not know the container, or knows it but is not running
     /// it. Neither case has an address to offer: the one it had on its last run belongs to
-    /// whatever holds that address now, not to this sandbox.
+    /// whatever holds that address now, not to this session.
     pub async fn address_of(&self, name: &ContainerName) -> Result<Ipv4Addr> {
         let state = self
             .runtime()
@@ -127,7 +128,7 @@ impl Host {
             .await
             .with_context(|| format!("looking up `{name}`"))?;
         if state.status.state != RunState::Running {
-            bail!("`{name}` is not running; start it with `cyber-sandbox up {name}`");
+            bail!("session {name} is not running; reopen it with `--resume {name}`");
         }
         state
             .ipv4_address()
@@ -136,20 +137,20 @@ impl Host {
 
     /// Path of the record describing `id`.
     #[must_use]
-    pub fn record_path(&self, id: &str) -> PathBuf {
-        self.state.join("sandboxes").join(format!("{id}.json"))
+    pub fn session_path(&self, id: &SessionId) -> PathBuf {
+        self.state.join("sessions").join(format!("{id}.json"))
     }
 
     /// Reads the record for `id`.
     ///
     /// # Errors
-    /// Fails when no such sandbox has been started, or the record cannot be read.
-    pub async fn record(&self, id: &str) -> Result<SandboxRecord> {
-        let path = self.record_path(id);
+    /// Fails when no such session exists, or the record cannot be read.
+    pub async fn session(&self, id: &SessionId) -> Result<SessionRecord> {
+        let path = self.session_path(id);
         let text = match tokio::fs::read_to_string(&path).await {
             Ok(text) => text,
             Err(source) if source.kind() == std::io::ErrorKind::NotFound => {
-                bail!("no sandbox named `{id}`; start one with `cyber-sandbox up {id}`")
+                bail!("no session {id} on this host")
             }
             Err(source) => {
                 return Err(source).with_context(|| format!("reading {}", path.display()));
@@ -158,12 +159,15 @@ impl Host {
         serde_json::from_str(&text).with_context(|| format!("parsing {}", path.display()))
     }
 
-    /// Every sandbox the host has started, ordered by id.
+    /// Every session the host holds, most recently opened first.
+    ///
+    /// That order is the picker's order and the reclaimer's reverse order, so both agree
+    /// on which environments a researcher is still working in.
     ///
     /// # Errors
     /// Fails when the state directory cannot be read or holds an unreadable record.
-    pub async fn records(&self) -> Result<Vec<SandboxRecord>> {
-        let directory = self.state.join("sandboxes");
+    pub async fn sessions(&self) -> Result<Vec<SessionRecord>> {
+        let directory = self.state.join("sessions");
         let mut entries = match tokio::fs::read_dir(&directory).await {
             Ok(entries) => entries,
             Err(source) if source.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
@@ -185,23 +189,23 @@ impl Host {
                 .await
                 .with_context(|| format!("reading {}", path.display()))?;
             records.push(
-                serde_json::from_str::<SandboxRecord>(&text)
+                serde_json::from_str::<SessionRecord>(&text)
                     .with_context(|| format!("parsing {}", path.display()))?,
             );
         }
-        records.sort_by(|left, right| left.id.cmp(&right.id));
+        records.sort_by_key(|record| Reverse(record.last_used));
         Ok(records)
     }
 
-    /// Writes the record for a sandbox that has just started.
+    /// Writes the record for a session that has just been opened.
     ///
     /// # Errors
     /// Fails when the state directory cannot be created or written.
-    pub async fn store(&self, record: &SandboxRecord) -> Result<()> {
-        let path = self.record_path(&record.id);
+    pub async fn store(&self, record: &SessionRecord) -> Result<()> {
+        let path = self.session_path(&record.id);
         create_parent(&path).await?;
         let mut text =
-            serde_json::to_string_pretty(record).context("encoding the sandbox record")?;
+            serde_json::to_string_pretty(record).context("encoding the session record")?;
         text.push('\n');
         tokio::fs::write(&path, text)
             .await
@@ -212,21 +216,13 @@ impl Host {
     ///
     /// # Errors
     /// Fails when the record exists but cannot be removed.
-    pub async fn forget(&self, id: &str) -> Result<()> {
-        let path = self.record_path(id);
+    pub async fn forget(&self, id: &SessionId) -> Result<()> {
+        let path = self.session_path(id);
         match tokio::fs::remove_file(&path).await {
             Ok(()) => Ok(()),
             Err(source) if source.kind() == std::io::ErrorKind::NotFound => Ok(()),
             Err(source) => Err(source).with_context(|| format!("removing {}", path.display())),
         }
-    }
-
-    /// The container name a sandbox id maps to.
-    ///
-    /// # Errors
-    /// Fails when the id is not a name the runtime accepts.
-    pub fn container_name(id: &str) -> Result<ContainerName> {
-        ContainerName::new(id).map_err(Into::into)
     }
 }
 

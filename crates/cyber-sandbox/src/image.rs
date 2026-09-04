@@ -1,8 +1,15 @@
+//! Building the sandbox image, which nobody asks for directly.
+//!
+//! The image is an implementation detail of a session: it is built the first time a
+//! session needs one for its architecture, and never again. There is no command for it,
+//! because a researcher asking for an environment has no reason to know that one of the
+//! steps is a Kali image with the audit gateway compiled into it.
+
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context as _, Result, bail};
-use cyber_sandbox_image::{BuildContext, ToolProfile};
-use cyber_sandbox_runtime::{Arch, Build, ImageReference};
+use cyber_sandbox_image::BuildContext;
+use cyber_sandbox_runtime::{Arch, Build};
 
 use crate::{cli, host::Host};
 
@@ -12,40 +19,15 @@ const GIB: u64 = 1024 * 1024 * 1024;
 /// Crate whose presence proves the given directory really is the cyber-sandbox workspace.
 const GATEWAY_CRATE: &str = "crates/cyber-sandbox-gateway/Cargo.toml";
 
-/// Builds the sandbox image from `arguments`.
+/// Builds the image a session of architecture `arch` starts from.
 ///
 /// # Errors
 /// Fails when the workspace does not hold the gateway sources, when the build context
 /// cannot be staged, or when the builder exits non-zero.
-pub async fn build(host: &Host, arguments: &cli::ImageBuildArgs) -> Result<()> {
-    run(
-        host,
-        &arguments.workspace,
-        arguments
-            .tag
-            .clone()
-            .unwrap_or_else(|| cli::default_image(arguments.arch)),
-        &arguments.base_image,
-        arguments.arch,
-        arguments.profile,
-    )
-    .await
-}
-
-/// Builds `tag` from `workspace`, which is what both `image build` and an `up` against a
-/// missing image do.
-///
-/// # Errors
-/// Fails when the workspace does not hold the gateway sources, when the build context
-/// cannot be staged, or when the builder exits non-zero.
-pub async fn run(
-    host: &Host,
-    workspace: &Path,
-    tag: ImageReference,
-    base_image: &str,
-    arch: Arch,
-    profile: ToolProfile,
-) -> Result<()> {
+pub async fn build(host: &Host, workspace: &Path, arch: Arch) -> Result<()> {
+    let tag = cli::default_image(arch);
+    let base_image = cli::DEFAULT_BASE_IMAGE;
+    let profile = cli::DEFAULT_PROFILE;
     let workspace = resolve_workspace(workspace)?;
     let staging = host.build_directory().join(arch.as_str());
 
@@ -95,8 +77,9 @@ fn resolve_workspace(workspace: &Path) -> Result<PathBuf> {
         .with_context(|| format!("resolving the workspace {}", workspace.display()))?;
     if !workspace.join(GATEWAY_CRATE).is_file() {
         bail!(
-            "{} does not hold {GATEWAY_CRATE}; point `--workspace` at a cyber-sandbox checkout, \
-             because the image compiles the audit gateway from source",
+            "the sandbox image has not been built yet and {} does not hold {GATEWAY_CRATE}; \
+             point `--workspace` at a cyber-sandbox checkout, because the image compiles \
+             the audit gateway from source",
             workspace.display()
         );
     }

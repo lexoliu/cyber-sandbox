@@ -5,30 +5,35 @@ use cyber_sandbox_audit::{AuditEvent, AuditRecord, BlockReason, Endpoint, Transp
 
 use crate::{cli, host::Host};
 
-/// Prints the tail of a sandbox's audit trail, optionally following it.
+/// Follows a session's network audit trail.
+///
+/// It always follows. A trail that stopped at the moment the command was typed says
+/// nothing about the sample that is running right now, and having to remember a flag to
+/// see the packets a detonation sends is a way to miss them.
 ///
 /// The trail is read through the runtime rather than a host mount: it is written inside
 /// the guest by the gateway account and by nothing else, so reading it as that account
 /// keeps the file out of reach of everything that runs sample code.
 ///
 /// # Errors
-/// Fails when no such sandbox is known, when the trail cannot be read, or when a record
-/// in it is not a record this build understands.
-pub async fn tail(host: &Host, arguments: &cli::AuditTail) -> Result<()> {
-    let record = host.record(&arguments.id).await?;
-    let name = Host::container_name(&record.id)?;
+/// Fails when no such session exists, when its machine is not running, when the trail
+/// cannot be read, or when a record in it is not a record this build understands.
+pub async fn follow(host: &Host, arguments: &cli::Audit) -> Result<()> {
+    let record = host.session(&arguments.session).await?;
+    let name = record.id.container_name()?;
+    // Asked for its own sake: the trail lives inside the machine, so a stopped one has
+    // nothing to read and the researcher should hear that rather than an exec failure.
+    host.address_of(&name).await?;
     let layout = host.layout();
 
-    let mut command = vec![
+    let command = vec![
         "tail".to_owned(),
         "-n".to_owned(),
         arguments.lines.to_string(),
-    ];
-    if arguments.follow {
         // `-F` rather than `-f`, because the gateway rotates the trail it is appending to.
-        command.push("-F".to_owned());
-    }
-    command.push(layout.audit_trail().display().to_string());
+        "-F".to_owned(),
+        layout.audit_trail().display().to_string(),
+    ];
 
     let mut stream = host
         .runtime()
@@ -39,47 +44,19 @@ pub async fn tail(host: &Host, arguments: &cli::AuditTail) -> Result<()> {
         if line.trim().is_empty() {
             continue;
         }
-        let record: AuditRecord = serde_json::from_str(&line)
-            .with_context(|| format!("parsing an audit record: {line}"))?;
-        writeln!(stdout, "{}", summarize(&record)).context("writing the audit trail")?;
+        // `--raw` is what an exported trail is: evidence has to stay byte-for-byte what
+        // the gateway recorded, so it is passed through without being parsed at all.
+        if arguments.raw {
+            writeln!(stdout, "{line}").context("writing the audit trail")?;
+        } else {
+            let record: AuditRecord = serde_json::from_str(&line)
+                .with_context(|| format!("parsing an audit record: {line}"))?;
+            writeln!(stdout, "{}", summarize(&record)).context("writing the audit trail")?;
+        }
         stdout.flush().context("writing the audit trail")?;
     }
 
     stream.finish().await.map_err(Into::into)
-}
-
-/// Copies a sandbox's whole audit trail out, unmodified.
-///
-/// The output is the gateway's own JSONL rather than the rendering `tail` prints, because
-/// an exported trail is evidence: it has to stay byte-for-byte what the gateway recorded.
-///
-/// # Errors
-/// Fails when no such sandbox is known, when the trail cannot be read, or when the
-/// destination cannot be written.
-pub async fn export(host: &Host, arguments: &cli::AuditExport) -> Result<()> {
-    let record = host.record(&arguments.id).await?;
-    let name = Host::container_name(&record.id)?;
-    let layout = host.layout();
-
-    let trail = host
-        .runtime()
-        .exec_as(
-            &name,
-            &layout.gateway.name,
-            &["cat".to_owned(), layout.audit_trail().display().to_string()],
-        )
-        .await
-        .context("reading the audit trail")?;
-
-    match &arguments.output {
-        Some(path) => tokio::fs::write(path, trail.stdout)
-            .await
-            .with_context(|| format!("writing {}", path.display())),
-        None => std::io::stdout()
-            .lock()
-            .write_all(trail.stdout.as_bytes())
-            .context("writing the audit trail"),
-    }
 }
 
 /// One audited event as a single line a person can scan.
