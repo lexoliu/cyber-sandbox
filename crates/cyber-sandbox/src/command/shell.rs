@@ -1,21 +1,8 @@
-use std::{io::Write as _, os::unix::process::CommandExt as _};
+use std::os::unix::process::CommandExt as _;
 
 use anyhow::{Context as _, Result};
-use askama::Template;
 
-use crate::{cli, host::Host, provision};
-
-/// What is printed before the session is handed over.
-#[derive(Debug, Template)]
-#[template(path = "session.txt", escape = "none")]
-struct Banner {
-    created: bool,
-    id: String,
-    image: String,
-    arch: String,
-    samples: String,
-    work_dir: String,
-}
+use crate::{cli, command::banner, host::Host, provision};
 
 /// Opens a shell, or runs a command, inside an isolated research session.
 ///
@@ -31,7 +18,7 @@ struct Banner {
 pub async fn run(host: &Host, arguments: &cli::Shell) -> Result<()> {
     let session = provision::open(host, &arguments.attach).await?;
     let record = &session.record;
-    banner(host, &session)?;
+    banner(host, &session, "shell")?;
 
     let known_hosts = host.known_hosts_of(&record.id).await?;
     let endpoint = record.endpoint(session.address, known_hosts);
@@ -44,38 +31,6 @@ pub async fn run(host: &Host, arguments: &cli::Shell) -> Result<()> {
     ));
 
     Err(client.exec()).with_context(|| format!("opening session {}", record.id))
-}
-
-/// Tells the researcher what they are about to be dropped into.
-///
-/// Written to standard error, because the session's own output is what belongs on
-/// standard output — a `cyber-sandbox shell -- file sample.bin` piped into something else
-/// must not have this in front of it.
-fn banner(host: &Host, session: &provision::Session) -> Result<()> {
-    let record = &session.record;
-    let text = Banner {
-        created: session.created,
-        id: record.id.to_string(),
-        image: record.image.to_string(),
-        arch: record.arch.to_string(),
-        samples: record.samples.as_ref().map_or_else(
-            || "none mounted".to_owned(),
-            |path| {
-                format!(
-                    "{} \u{2192} {}",
-                    path.display(),
-                    host.layout().samples_dir.display()
-                )
-            },
-        ),
-        work_dir: record.work_dir.display().to_string(),
-    }
-    .render()
-    .context("rendering the session summary")?;
-    std::io::stderr()
-        .lock()
-        .write_all(text.as_bytes())
-        .context("writing the session summary")
 }
 
 /// What the session is asked to run, starting in the session's work directory.

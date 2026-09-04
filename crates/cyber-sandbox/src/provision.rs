@@ -14,8 +14,8 @@ use std::{
 
 use anyhow::{Context as _, Result, bail};
 use cyber_sandbox_runtime::{
-    Arch, Capability, ContainerName, ContainerSpec, ContainerState, Mount, Reservation, RunState,
-    Sandbox,
+    Arch, Capability, ContainerName, ContainerSpec, ContainerState, ImageReference, Mount,
+    Reservation, RunState, Sandbox,
 };
 use jiff::Timestamp;
 
@@ -44,6 +44,7 @@ const ID_ATTEMPTS: usize = 32;
 const NAME_VARIABLE: &str = "CYBER_SANDBOX_NAME";
 const RESOLVER_VARIABLE: &str = "CYBER_SANDBOX_RESOLVER";
 const AUTHORIZED_KEY_VARIABLE: &str = "CYBER_SANDBOX_AUTHORIZED_KEY";
+const WORK_ALIAS_VARIABLE: &str = "CYBER_SANDBOX_WORK_ALIAS";
 
 /// A session whose machine is running and reachable right now.
 #[derive(Debug, Clone)]
@@ -137,23 +138,24 @@ async fn create(host: &Host, attach: &cli::Attach) -> Result<Session> {
     let id = allocate(host).await?;
     let name = id.container_name()?;
     let key = SandboxKey::load_or_create(&host.key_directory(), id.as_str()).await?;
+    let work_alias = host.work_alias_of(&id).await?;
 
     let layout = host.layout();
-    let spec = spec(
-        host,
-        &name,
-        image.clone(),
+    let machine = Machine {
+        name,
+        image: image.clone(),
         arch,
-        &key,
+        key: &key,
         reservation,
-        samples.clone(),
-    );
+        samples: samples.clone(),
+        work_alias,
+    };
     host.runtime()
-        .run_detached(&spec)
+        .run_detached(&machine.spec(host))
         .await
         .context("creating the session's machine")?;
 
-    let address = wait_until_reachable(host, &name, layout.ssh_port).await?;
+    let address = wait_until_reachable(host, &machine.name, layout.ssh_port).await?;
     let now = Timestamp::now();
     let record = SessionRecord {
         id,
@@ -269,46 +271,68 @@ async fn allocate(host: &Host) -> Result<SessionId> {
     )
 }
 
-fn spec(
-    host: &Host,
-    name: &ContainerName,
-    image: cyber_sandbox_runtime::ImageReference,
+/// Everything one session's machine is made of, gathered before any of it exists.
+///
+/// These travel together because they describe a single machine, and taken apart they
+/// become a row of loose values whose order is all that keeps them straight.
+struct Machine<'key> {
+    name: ContainerName,
+    image: ImageReference,
     arch: Arch,
-    key: &SandboxKey,
+    key: &'key SandboxKey,
     reservation: Reservation<Sandbox>,
     samples: Option<PathBuf>,
-) -> ContainerSpec {
-    let layout = host.layout();
-    let mut spec = ContainerSpec::new(name.clone(), image, arch, reservation);
+    work_alias: PathBuf,
+}
 
-    // Neither capability below has a use inside the machine, so the runtime removes them
-    // before the guest is even started.
-    spec.cap_drop = vec![Capability::SysModule, Capability::SysAdmin];
-    // NET_ADMIN is what the entrypoint installs the egress policy with, and it is not in
-    // the runtime's default set. The entrypoint hands it to nothing else: it drops the
-    // capability from the bounding set of the process tree that runs sample code, so only
-    // the code between container start and sshd ever holds it. SYS_PTRACE is for the
-    // debuggers and tracers in the analysis toolchain, which have to attach to the
-    // processes they are analysing.
-    spec.cap_add = vec![Capability::NetAdmin, Capability::SysPtrace];
-    spec.init = true;
+impl Machine<'_> {
+    /// What the runtime is asked to create.
+    fn spec(&self, host: &Host) -> ContainerSpec {
+        let layout = host.layout();
+        let mut spec = ContainerSpec::new(
+            self.name.clone(),
+            self.image.clone(),
+            self.arch,
+            self.reservation,
+        );
 
-    if let Some(source) = samples {
-        spec.mounts
-            .push(Mount::read_only(source, layout.samples_dir.clone()));
+        // Neither capability below has a use inside the machine, so the runtime removes them
+        // before the guest is even started.
+        spec.cap_drop = vec![Capability::SysModule, Capability::SysAdmin];
+        // NET_ADMIN is what the entrypoint installs the egress policy with, and it is not in
+        // the runtime's default set. The entrypoint hands it to nothing else: it drops the
+        // capability from the bounding set of the process tree that runs sample code, so only
+        // the code between container start and sshd ever holds it. SYS_PTRACE is for the
+        // debuggers and tracers in the analysis toolchain, which have to attach to the
+        // processes they are analysing.
+        spec.cap_add = vec![Capability::NetAdmin, Capability::SysPtrace];
+        spec.init = true;
+
+        if let Some(source) = self.samples.as_ref() {
+            spec.mounts
+                .push(Mount::read_only(source.clone(), layout.samples_dir.clone()));
+        }
+
+        spec.env
+            .insert(NAME_VARIABLE.to_owned(), self.name.to_string());
+        spec.env.insert(
+            RESOLVER_VARIABLE.to_owned(),
+            cli::DEFAULT_RESOLVER.to_owned(),
+        );
+        spec.env.insert(
+            AUTHORIZED_KEY_VARIABLE.to_owned(),
+            self.key.authorized_key().to_owned(),
+        );
+        // Not a mount: the entrypoint makes this path a symlink to the work directory, so an
+        // agent that resolved it on the host executes in the session's own filesystem and
+        // the host directory it named stays empty.
+        spec.env.insert(
+            WORK_ALIAS_VARIABLE.to_owned(),
+            self.work_alias.display().to_string(),
+        );
+
+        spec
     }
-
-    spec.env.insert(NAME_VARIABLE.to_owned(), name.to_string());
-    spec.env.insert(
-        RESOLVER_VARIABLE.to_owned(),
-        cli::DEFAULT_RESOLVER.to_owned(),
-    );
-    spec.env.insert(
-        AUTHORIZED_KEY_VARIABLE.to_owned(),
-        key.authorized_key().to_owned(),
-    );
-
-    spec
 }
 
 fn canonical_samples(samples: Option<&Path>) -> Result<Option<PathBuf>> {

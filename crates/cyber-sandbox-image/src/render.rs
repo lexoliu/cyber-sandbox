@@ -66,6 +66,8 @@ pub struct Entrypoint {
     pub ca_certificate: String,
     /// Authorized keys file the entrypoint writes the host's public key into.
     pub authorized_keys: String,
+    /// Directory work happens in, which the agent's path is aliased to.
+    pub work_dir: String,
     /// Transparent proxy port.
     pub proxy_port: u16,
     /// Intercepting resolver port.
@@ -141,6 +143,7 @@ impl RenderedImage {
             audit_trail: layout.audit_trail().display().to_string(),
             ca_certificate: layout.ca_certificate().display().to_string(),
             authorized_keys: layout.authorized_keys.display().to_string(),
+            work_dir: layout.work_dir.display().to_string(),
             proxy_port: layout.proxy_port,
             dns_port: layout.dns_port,
             nflog_group: layout.nflog_group,
@@ -223,6 +226,18 @@ mod tests {
             "every accept is matched by interface, uid, connection state, or the \
              loopback destination the redirection itself wrote; an accept matched by \
              protocol alone would let traffic the redirection missed leave unaudited"
+        );
+    }
+
+    #[test]
+    fn the_agents_working_directory_is_a_link_into_the_sandbox_rather_than_a_mount() {
+        let entrypoint = rendered().entrypoint;
+        assert!(
+            entrypoint.contains(r#"ln -sfn "${WORK_DIR}" "${CYBER_SANDBOX_WORK_ALIAS}""#),
+            "an agent resolves its working directory on the host and then asks the sandbox \
+             to execute there, so the path it resolved has to name the work directory here \
+             — and as a link rather than a mount, so nothing of the host's is shared: \
+             {entrypoint}"
         );
     }
 

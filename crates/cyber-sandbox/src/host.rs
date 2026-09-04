@@ -5,7 +5,9 @@ use std::{
 };
 
 use anyhow::{Context as _, Result, bail};
-use cyber_sandbox_agents::{AgentIntegration, key_directory, known_hosts_directory};
+use cyber_sandbox_agents::{
+    AgentIntegration, key_directory, known_hosts_directory, work_alias_directory,
+};
 use cyber_sandbox_image::SandboxLayout;
 use cyber_sandbox_runtime::{AppleContainer, Committed, ContainerName, HostBudget, RunState};
 
@@ -106,6 +108,25 @@ impl Host {
     pub async fn known_hosts_of(&self, id: &SessionId) -> Result<PathBuf> {
         let path = known_hosts_directory(&self.home).join(id.as_str());
         create_parent(&path).await?;
+        Ok(path)
+    }
+
+    /// Directory an agent is pointed at for `id`, with the directory itself in place.
+    ///
+    /// Empty, and meant to stay that way: the session holds a symlink at the same
+    /// absolute path pointing at its own work directory, so an agent that resolves the
+    /// path here and then executes it there lands in the session. It is created on every
+    /// open because an agent validates the path before it connects, and a researcher who
+    /// has cleaned out their home directory would otherwise be refused by their own
+    /// agent rather than by anything to do with the session.
+    ///
+    /// # Errors
+    /// Fails when the directory cannot be created.
+    pub async fn work_alias_of(&self, id: &SessionId) -> Result<PathBuf> {
+        let path = work_alias_directory(&self.home).join(id.as_str());
+        tokio::fs::create_dir_all(&path)
+            .await
+            .with_context(|| format!("creating {}", path.display()))?;
         Ok(path)
     }
 

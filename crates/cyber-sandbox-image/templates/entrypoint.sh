@@ -11,6 +11,7 @@ readonly GATEWAY_USER={{ gateway_user }}
 readonly AUDIT_TRAIL={{ audit_trail }}
 readonly CA_CERTIFICATE={{ ca_certificate }}
 readonly AUTHORIZED_KEYS={{ authorized_keys }}
+readonly WORK_DIR={{ work_dir }}
 readonly GATEWAY=/usr/local/bin/cyber-sandbox-gateway
 
 /usr/local/lib/cyber-sandbox/egress-policy.sh
@@ -47,6 +48,13 @@ install -d -o root -g root -m 0755 "$(dirname "${AUTHORIZED_KEYS}")"
 printf '%s\n' "${CYBER_SANDBOX_AUTHORIZED_KEY}" >"${AUTHORIZED_KEYS}"
 chown root:root "${AUTHORIZED_KEYS}"
 chmod 0644 "${AUTHORIZED_KEYS}"
+
+# An agent running on the host resolves the directory it works in against the host's
+# filesystem and then asks this machine to execute there, so that path has to name
+# something here too. It names this symlink, which lands the agent in the work directory
+# — nothing of the host's is mounted, and the directory the agent resolved stays empty.
+install -d -o root -g root -m 0755 "$(dirname "${CYBER_SANDBOX_WORK_ALIAS}")"
+ln -sfn "${WORK_DIR}" "${CYBER_SANDBOX_WORK_ALIAS}"
 
 ssh-keygen -A
 exec capsh --drop=cap_net_admin,cap_sys_module,cap_sys_rawio -- \

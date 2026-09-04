@@ -6,15 +6,16 @@
 //! and never needs egress to be usable as a research environment.
 //!
 //! Existing configuration is preserved: Claude's settings are edited as JSON and Codex's
-//! environments as a TOML document, so hand-written entries and comments survive.
+//! files as TOML documents, so hand-written entries and comments survive.
 
 mod claude;
 mod codex;
 mod endpoint;
 mod error;
+mod toml_file;
 
 pub use claude::{ClaudeSettings, SshConfig};
-pub use codex::CodexEnvironments;
+pub use codex::{Codex, CodexConfig, CodexEnvironments};
 pub use endpoint::SandboxEndpoint;
 pub use error::AgentError;
 
@@ -24,7 +25,7 @@ use std::path::{Path, PathBuf};
 #[derive(Debug, Clone)]
 pub struct AgentIntegration {
     claude: ClaudeSettings,
-    codex: CodexEnvironments,
+    codex: Codex,
 }
 
 impl AgentIntegration {
@@ -33,29 +34,20 @@ impl AgentIntegration {
     pub fn for_home(home: &Path) -> Self {
         Self {
             claude: ClaudeSettings::new(home.join(".claude").join("settings.json")),
-            codex: CodexEnvironments::new(home.join(".codex").join("environments.toml")),
+            codex: Codex::for_home(home),
         }
     }
 
-    /// Path of the Claude Code settings file being edited.
+    /// Claude Code's settings, where the sandbox appears as an SSH configuration.
     #[must_use]
-    pub fn claude_path(&self) -> &Path {
-        self.claude.path()
+    pub fn claude(&self) -> &ClaudeSettings {
+        &self.claude
     }
 
-    /// Path of the Codex environments file being edited.
+    /// Codex's configuration, where the sandbox appears as a stdio-over-SSH environment.
     #[must_use]
-    pub fn codex_path(&self) -> &Path {
-        self.codex.path()
-    }
-
-    /// Adds or replaces the entry both agents use to reach `endpoint`.
-    ///
-    /// # Errors
-    /// Fails when either file cannot be read, parsed or written.
-    pub async fn register(&self, endpoint: &SandboxEndpoint) -> Result<(), AgentError> {
-        self.claude.register(endpoint).await?;
-        self.codex.register(endpoint).await
+    pub fn codex(&self) -> &Codex {
+        &self.codex
     }
 
     /// Removes the entries belonging to `id` from both agents.
@@ -78,6 +70,18 @@ pub fn key_directory(home: &Path) -> PathBuf {
 #[must_use]
 pub fn known_hosts_directory(home: &Path) -> PathBuf {
     home.join(".cyber-sandbox").join("known_hosts")
+}
+
+/// Where the directories agents are pointed at live, one per sandbox.
+///
+/// An agent whose model side runs on the host resolves the directory it is working in
+/// against the host's own filesystem, then asks the sandbox to execute there. So the path
+/// it is given has to exist on both sides — and the sandbox aliases its copy to the work
+/// directory, which is why the host's copy stays empty. Nothing is shared through it: it
+/// exists only so that the path the agent validates is a path the sandbox can honour.
+#[must_use]
+pub fn work_alias_directory(home: &Path) -> PathBuf {
+    home.join(".cyber-sandbox").join("work")
 }
 
 /// Replaces `path` with `contents`, creating the parent directory and never leaving a
