@@ -1,6 +1,7 @@
 //! Implementations of the individual commands.
 
 pub mod audit;
+pub mod claude;
 pub mod codex;
 pub mod shell;
 
@@ -56,4 +57,24 @@ pub fn banner(host: &Host, session: &provision::Session, command: &'static str) 
         .lock()
         .write_all(text.as_bytes())
         .context("writing the session summary")
+}
+
+/// Quotes `value` for a POSIX shell, since a remote command is interpreted by one.
+///
+/// Every path this tool sends across is one it made itself, so this is not the difference
+/// between working and broken — it is the difference between a session that goes wrong
+/// where a path holds a quote and one that cannot be made to run something else by it.
+pub fn shell_quote(value: &str) -> String {
+    format!("'{}'", value.replace('\'', r"'\''"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::shell_quote;
+
+    #[test]
+    fn a_path_holding_a_quote_cannot_escape_the_remote_command() {
+        assert_eq!(shell_quote("/srv/work"), "'/srv/work'");
+        assert_eq!(shell_quote("/srv/it's"), r"'/srv/it'\''s'");
+    }
 }

@@ -6,6 +6,7 @@
 //! in one place cannot silently disagree with another.
 
 mod layout;
+mod onboarding;
 mod openssh;
 mod profile;
 mod render;

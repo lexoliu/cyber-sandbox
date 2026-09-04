@@ -12,6 +12,7 @@ readonly AUDIT_TRAIL={{ audit_trail }}
 readonly CA_CERTIFICATE={{ ca_certificate }}
 readonly AUTHORIZED_KEYS={{ authorized_keys }}
 readonly WORK_DIR={{ work_dir }}
+readonly RUNTIME_DIR={{ runtime_dir }}
 readonly GATEWAY=/usr/local/bin/cyber-sandbox-gateway
 
 /usr/local/lib/cyber-sandbox/egress-policy.sh
@@ -55,6 +56,13 @@ chmod 0644 "${AUTHORIZED_KEYS}"
 # — nothing of the host's is mounted, and the directory the agent resolved stays empty.
 install -d -o root -g root -m 0755 "$(dirname "${CYBER_SANDBOX_WORK_ALIAS}")"
 ln -sfn "${WORK_DIR}" "${CYBER_SANDBOX_WORK_ALIAS}"
+
+# Where the host lands a borrowed credential and the socket it is fetched over. It is
+# made here rather than by the courier because sshd binds the forwarded socket before any
+# command runs, and it is the researcher's alone at 0700 so that nothing else in the
+# sandbox — a sample running under another account, or the gateway — can see a token by
+# opening the file or by connecting to the socket that hands it out.
+install -d -o {{ researcher_user }} -g {{ researcher_user }} -m 0700 "${RUNTIME_DIR}"
 
 ssh-keygen -A
 exec capsh --drop=cap_net_admin,cap_sys_module,cap_sys_rawio -- \

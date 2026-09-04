@@ -68,6 +68,12 @@ impl BuildContext {
         write_file(&directory.join("entrypoint.sh"), &rendered.entrypoint).await?;
         write_file(&directory.join("egress-policy.sh"), &rendered.egress_policy).await?;
         write_file(&directory.join("sshd_config"), &rendered.sshd_config).await?;
+        write_file(&directory.join("claude.json"), &rendered.claude_config).await?;
+        write_file(
+            &directory.join("claude-settings.json"),
+            &rendered.claude_settings,
+        )
+        .await?;
 
         Ok(Self {
             directory,

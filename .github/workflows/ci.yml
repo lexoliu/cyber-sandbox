@@ -21,13 +21,15 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - name: Formatting
         run: cargo fmt --all --check
+      # The default members are the crates that build on a host; the ones that only
+      # exist inside a session are checked by the job below, on the system they run on.
       - name: Clippy
-        run: cargo clippy --workspace --exclude cyber-sandbox-gateway --all-targets -- -D warnings
+        run: cargo clippy --all-targets -- -D warnings
       - name: Tests
-        run: cargo test --workspace --exclude cyber-sandbox-gateway
+        run: cargo test
 
-  gateway:
-    name: gateway (Linux)
+  guest:
+    name: guest (Linux)
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v5
@@ -36,6 +38,6 @@ jobs:
           components: clippy, rustfmt
       - uses: Swatinem/rust-cache@v2
       - name: Clippy
-        run: cargo clippy -p cyber-sandbox-gateway --all-targets -- -D warnings
+        run: cargo clippy -p cyber-sandbox-gateway -p cyber-sandbox-courier --all-targets -- -D warnings
       - name: Tests
-        run: cargo test -p cyber-sandbox-gateway
+        run: cargo test -p cyber-sandbox-gateway -p cyber-sandbox-courier

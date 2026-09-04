@@ -48,6 +48,8 @@ pub struct Cli {
 /// The top-level commands.
 #[derive(Debug, Subcommand)]
 pub enum Command {
+    /// Opens Claude Code on an isolated research session.
+    Claude(Claude),
     /// Opens Codex on an isolated research session.
     Codex(Codex),
     /// Opens a shell in an isolated research session.
@@ -81,6 +83,17 @@ pub struct Attach {
     /// Checkout the audit gateway is compiled from, if the image has to be built first.
     #[arg(long, default_value = ".")]
     pub workspace: PathBuf,
+}
+
+/// Arguments of `claude`.
+///
+/// Claude Code runs inside the session, unlike Codex, because that is where the files it
+/// is being asked about are. What stays on the host is the login: the session is lent a
+/// token that expires in hours, over a socket, for exactly as long as the agent runs.
+#[derive(Debug, Args)]
+pub struct Claude {
+    #[command(flatten)]
+    pub attach: Attach,
 }
 
 /// Arguments of `codex`.

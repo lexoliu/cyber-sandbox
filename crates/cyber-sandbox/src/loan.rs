@@ -1,0 +1,285 @@
+//! Lending the researcher's Claude Code login to a session for as long as it is open.
+//!
+//! Claude Code runs inside the session, so unlike Codex it needs a credential there. What
+//! it is given is an access token and nothing else: the refresh token beside it in the
+//! researcher's keychain is what their own Claude Code renews its login with, and
+//! renewing rotates it, so a session that spent it would log them out of their own
+//! machine. The token that does cross expires on its own within hours.
+//!
+//! It crosses over a unix socket the host owns, published inside the session by ssh as a
+//! remote forward, and is answered one token per connection. That shape is deliberate:
+//! nothing is written down on the host, the session cannot reach the socket after the ssh
+//! connection ends, and the courier can come back for a fresh token when the one it holds
+//! is nearly out — which is how a session outlives a single token's lifetime without ever
+//! being handed the credential that mints them.
+
+use std::{
+    io::ErrorKind,
+    os::unix::fs::PermissionsExt as _,
+    path::{Path, PathBuf},
+};
+
+use anyhow::{Context as _, Result, bail};
+use cyber_sandbox_agents::ClaudeLogin;
+use tokio::net::{UnixListener, UnixStream};
+
+use crate::session::SessionId;
+
+/// Longest path a unix socket may be bound at on macOS, including its terminator.
+///
+/// Binding past it fails with a message about an invalid argument that says nothing about
+/// the length, so the length is checked here instead — where the answer is that the
+/// researcher's home directory is deeper than this design allows for.
+const MAX_SOCKET_PATH: usize = 104;
+
+/// One opening of a session, named so that two of them cannot collide.
+///
+/// A researcher may have the same machine open twice — a shell in one window and Claude
+/// Code in another, or two agents at once — and each opening publishes a socket and lands
+/// a credential file inside the session. Naming both after the opening rather than after
+/// the session is what keeps the second one from binding over the first one's socket and
+/// overwriting the first one's credential.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Attachment {
+    session: SessionId,
+    nonce: String,
+}
+
+/// How many hexadecimal digits distinguish two openings of one session.
+const NONCE_DIGITS: usize = 8;
+
+impl Attachment {
+    /// Names a new opening of `session`.
+    ///
+    /// # Errors
+    /// Fails when the operating system will not supply randomness, which is the one case
+    /// where making up a name would risk landing on another opening's socket.
+    pub fn random(session: SessionId) -> Result<Self> {
+        let mut bytes = [0u8; NONCE_DIGITS / 2];
+        getrandom::fill(&mut bytes).context("naming this opening of the session")?;
+        let nonce = bytes.iter().fold(String::new(), |mut nonce, byte| {
+            use std::fmt::Write as _;
+            write!(nonce, "{byte:02x}").expect("a String never fails to be written to");
+            nonce
+        });
+        Ok(Self { session, nonce })
+    }
+
+    /// File name of the socket the token is fetched over, on either machine.
+    #[must_use]
+    pub fn socket_name(&self) -> String {
+        format!("{}-{}.sock", self.session, self.nonce)
+    }
+
+    /// File name of the credential the courier writes inside the session.
+    #[must_use]
+    pub fn credentials_name(&self) -> String {
+        format!("{}-{}.json", self.session, self.nonce)
+    }
+}
+
+/// A socket handing out the researcher's access token, and the task serving it.
+#[derive(Debug)]
+pub struct Loan {
+    socket: PathBuf,
+    server: tokio::task::JoinHandle<()>,
+}
+
+impl Loan {
+    /// Starts lending from `login` on a socket at `socket`.
+    ///
+    /// # Errors
+    /// Fails when the socket path is longer than one can be bound at, or when it cannot
+    /// be bound.
+    pub async fn open(login: ClaudeLogin, socket: PathBuf) -> Result<Self> {
+        if socket.as_os_str().len() >= MAX_SOCKET_PATH {
+            bail!(
+                "{} is too long to bind a socket at ({} bytes, and the limit is {})",
+                socket.display(),
+                socket.as_os_str().len(),
+                MAX_SOCKET_PATH - 1
+            );
+        }
+        prepare(&socket).await?;
+        let listener = UnixListener::bind(&socket)
+            .with_context(|| format!("listening on {}", socket.display()))?;
+
+        Ok(Self {
+            socket,
+            server: tokio::spawn(serve(login, listener)),
+        })
+    }
+
+    /// The socket the session is to fetch from.
+    #[must_use]
+    pub fn socket(&self) -> &Path {
+        &self.socket
+    }
+
+    /// Stops lending and takes the socket back off the host's disk.
+    ///
+    /// # Errors
+    /// Fails when the socket file exists but cannot be removed, which would leave the
+    /// next attachment unable to bind its own.
+    pub async fn close(self) -> Result<()> {
+        self.server.abort();
+        match tokio::fs::remove_file(&self.socket).await {
+            Ok(()) => Ok(()),
+            Err(source) if source.kind() == ErrorKind::NotFound => Ok(()),
+            Err(source) => {
+                Err(source).with_context(|| format!("removing {}", self.socket.display()))
+            }
+        }
+    }
+}
+
+/// Makes the socket's directory, reachable by nobody else, and clears anything at the
+/// path itself.
+///
+/// A socket file outlives the process that bound it, so one left behind by an attachment
+/// that was killed rather than closed would otherwise make the next one fail to bind. The
+/// name carries fresh randomness, so what is being cleared here is never a live socket.
+async fn prepare(socket: &Path) -> Result<()> {
+    if let Some(parent) = socket.parent() {
+        tokio::fs::create_dir_all(parent)
+            .await
+            .with_context(|| format!("creating {}", parent.display()))?;
+        tokio::fs::set_permissions(parent, std::fs::Permissions::from_mode(0o700))
+            .await
+            .with_context(|| format!("restricting {}", parent.display()))?;
+    }
+    match tokio::fs::remove_file(socket).await {
+        Ok(()) => Ok(()),
+        Err(source) if source.kind() == ErrorKind::NotFound => Ok(()),
+        Err(source) => Err(source).with_context(|| format!("clearing {}", socket.display())),
+    }
+}
+
+/// Answers every connection with a token read fresh from the keychain.
+///
+/// Fresh rather than remembered, because the researcher's own Claude Code renews the
+/// stored login as it runs: a session that comes back for another token after hours of
+/// work gets whatever is valid now, and one that asks while the login happens to be
+/// expired is told so rather than handed something that will not work.
+///
+/// A connection that fails is logged and dropped. The session is untrusted, so a client
+/// that hangs up mid-sentence is an ordinary event, and it must not end the lending for
+/// the connection that comes after it.
+async fn serve(login: ClaudeLogin, listener: UnixListener) {
+    loop {
+        match listener.accept().await {
+            Ok((stream, _)) => {
+                if let Err(error) = lend(&login, stream).await {
+                    tracing::warn!("could not lend the login to the session: {error:#}");
+                }
+            }
+            Err(error) => {
+                tracing::warn!("the session's credential socket failed: {error}");
+                return;
+            }
+        }
+    }
+}
+
+/// Reads the login and writes the part of it a session may have.
+async fn lend(login: &ClaudeLogin, stream: UnixStream) -> Result<()> {
+    let bearer = login.bearer().await.context("reading the login to lend")?;
+    bearer
+        .send(stream)
+        .await
+        .context("handing the token to the session")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use cyber_sandbox_creds::Bearer;
+    use tempfile::TempDir;
+
+    #[test]
+    fn two_openings_of_one_session_do_not_land_on_each_others_files() {
+        let session: SessionId = "c0ffee".parse().unwrap();
+        let first = Attachment::random(session.clone()).unwrap();
+        let second = Attachment::random(session).unwrap();
+
+        assert_ne!(
+            first.socket_name(),
+            second.socket_name(),
+            "a shell and an agent open at once are two openings of one machine, and the \
+             second binding over the first one's socket would take its credential away"
+        );
+        assert!(first.socket_name().starts_with("c0ffee-"));
+        assert_ne!(first.socket_name(), first.credentials_name());
+    }
+
+    #[tokio::test]
+    async fn a_socket_path_the_operating_system_would_truncate_is_refused_before_binding() {
+        let directory = TempDir::new().unwrap();
+        let socket = directory.path().join("x".repeat(MAX_SOCKET_PATH));
+
+        let refused = Loan::open(ClaudeLogin::discover(), socket)
+            .await
+            .unwrap_err();
+
+        assert!(
+            format!("{refused:#}").contains("too long"),
+            "bind reports only an invalid argument, which says nothing about why: \
+             {refused:#}"
+        );
+    }
+
+    #[tokio::test]
+    async fn the_directory_a_borrowed_token_is_served_from_is_the_researchers_alone() {
+        let directory = TempDir::new().unwrap();
+        let run = directory.path().join("run");
+        prepare(&run.join("c0ffee.sock")).await.unwrap();
+
+        let mode = tokio::fs::metadata(&run)
+            .await
+            .unwrap()
+            .permissions()
+            .mode();
+
+        assert_eq!(
+            mode & 0o777,
+            0o700,
+            "anyone who can connect to the socket is handed the researcher's token, so \
+             the only account that may reach it is theirs"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_socket_left_by_an_attachment_that_was_killed_does_not_block_the_next_one() {
+        let directory = TempDir::new().unwrap();
+        let socket = directory.path().join("c0ffee.sock");
+        drop(UnixListener::bind(&socket).unwrap());
+        assert!(socket.exists());
+
+        prepare(&socket).await.unwrap();
+
+        UnixListener::bind(&socket).expect("the stale socket has been cleared");
+    }
+
+    #[tokio::test]
+    async fn one_connection_carries_one_token_and_then_ends() {
+        let directory = TempDir::new().unwrap();
+        let socket = directory.path().join("c0ffee.sock");
+        let listener = UnixListener::bind(&socket).unwrap();
+        let served = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            Bearer {
+                token: "sk-ant-oat01-borrowed".to_owned(),
+                expires_at: None,
+            }
+            .send(stream)
+            .await
+            .unwrap();
+        });
+
+        let stream = UnixStream::connect(&socket).await.unwrap();
+        let received = Bearer::receive(stream).await.unwrap();
+
+        served.await.unwrap();
+        assert_eq!(received.token, "sk-ant-oat01-borrowed");
+    }
+}
