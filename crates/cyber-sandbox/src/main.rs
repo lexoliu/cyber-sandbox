@@ -35,6 +35,7 @@ async fn main() -> Result<()> {
     let host = Host::discover()?;
 
     match &arguments.command {
+        cli::Command::Codex(codex) => command::codex::run(&host, codex).await,
         cli::Command::Shell(shell) => command::shell::run(&host, shell).await,
         cli::Command::Audit(audit) => command::audit::follow(&host, audit).await,
     }

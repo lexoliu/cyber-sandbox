@@ -48,6 +48,8 @@ pub struct Cli {
 /// The top-level commands.
 #[derive(Debug, Subcommand)]
 pub enum Command {
+    /// Opens Codex on an isolated research session.
+    Codex(Codex),
     /// Opens a shell in an isolated research session.
     Shell(Shell),
     /// Follows a session's network audit trail.
@@ -79,6 +81,16 @@ pub struct Attach {
     /// Checkout the audit gateway is compiled from, if the image has to be built first.
     #[arg(long, default_value = ".")]
     pub workspace: PathBuf,
+}
+
+/// Arguments of `codex`.
+///
+/// Codex itself stays on the host, where its credential already is; only its exec-server
+/// runs in the session. There is nothing to configure beyond which session that is.
+#[derive(Debug, Args)]
+pub struct Codex {
+    #[command(flatten)]
+    pub attach: Attach,
 }
 
 /// Arguments of `shell`.

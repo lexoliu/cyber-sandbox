@@ -28,9 +28,10 @@ dies, the redirect target stops listening and egress fails closed.
 
 ```sh
 cyber-sandbox shell --samples ~/samples   # a new session, with samples mounted read-only
+cyber-sandbox codex  --samples ~/samples  # the same, with Codex driving it
 cyber-sandbox audit c0ffee                # follow every packet that session sends
 cyber-sandbox shell --resume              # pick a session to come back to
-cyber-sandbox shell --resume c0ffee       # or name it
+cyber-sandbox codex --resume c0ffee       # or name it
 ```
 
 The first run builds the Kali image with the gateway compiled into it, from the checkout
@@ -39,6 +40,28 @@ you run it in. Every run after that starts in seconds.
 `--arch amd64` runs an x86_64 root filesystem under Rosetta, for samples that are not
 arm64. It is settled when the session is created, so an `amd64` sample gets its own
 session rather than a flag on an existing one.
+
+## Agents
+
+`cyber-sandbox codex` opens a session and hands it to Codex, running with approvals off:
+the session is the sandbox, so an agent that stops to ask for permission to read a file is
+one you have to babysit for no gain.
+
+Codex itself never leaves the host. Your ChatGPT subscription, and the credential behind
+it, stay where they already are; what runs in the session is `codex exec-server`, which
+authenticates to nothing.
+
+Three things in your configuration are borrowed for the length of a run and handed back
+exactly as they were: the session becomes an entry in `~/.codex/environments.toml`, it is
+preselected there so Codex opens on it without a menu, and the directory it works in is
+marked trusted in `~/.codex/config.toml` so opening it does not begin with a question
+about a directory cyber-sandbox made seconds earlier.
+
+That directory is `~/.cyber-sandbox/work/<id>`, and on the host it stays empty. Codex
+resolves the directory it works in against the host and then asks the session to execute
+there, so the path has to exist on both sides — inside the session the same path is a
+symlink to `/work`. Nothing is mounted through it, and a session left holding a path the
+host does not have is one where Codex quietly runs the command on your laptop instead.
 
 ## Layout
 

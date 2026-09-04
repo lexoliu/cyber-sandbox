@@ -16,10 +16,13 @@ use std::path::{Path, PathBuf};
 
 use toml_edit::{Array, ArrayOfTables, DocumentMut, Item, Table, value};
 
-use crate::{endpoint::SandboxEndpoint, error::AgentError, write_file};
+use crate::{endpoint::SandboxEndpoint, error::AgentError, toml_file::TomlFile};
 
 /// Top-level key holding the array of configured environments.
 const ENVIRONMENTS: &str = "environments";
+
+/// Top-level key naming the environment Codex attaches to without being asked.
+const DEFAULT: &str = "default";
 
 /// The remote program the sandbox runs, speaking the exec-server protocol over stdio.
 ///
@@ -34,20 +37,22 @@ const REMOTE_COMMAND: &[&str] = &["codex", "exec-server", "--listen", "stdio"];
 /// Codex's environments file, edited in place.
 #[derive(Debug, Clone)]
 pub struct CodexEnvironments {
-    path: PathBuf,
+    file: TomlFile,
 }
 
 impl CodexEnvironments {
     /// Points at the environments file to edit.
     #[must_use]
     pub fn new(path: PathBuf) -> Self {
-        Self { path }
+        Self {
+            file: TomlFile::new(path),
+        }
     }
 
     /// Path being edited.
     #[must_use]
     pub fn path(&self) -> &Path {
-        &self.path
+        self.file.path()
     }
 
     /// Adds `endpoint`, replacing any entry that already carries the same id.
@@ -55,11 +60,11 @@ impl CodexEnvironments {
     /// # Errors
     /// Fails when the file cannot be read, is not valid TOML, or cannot be written.
     pub async fn register(&self, endpoint: &SandboxEndpoint) -> Result<(), AgentError> {
-        let mut document = self.read().await?;
+        let mut document = self.file.read().await?;
         let environments = self.environments_of(&mut document)?;
         environments.retain(|table| Self::id_of(table) != Some(endpoint.id.as_str()));
         environments.push(Self::entry(endpoint));
-        self.write(&document).await
+        self.file.write(&document).await
     }
 
     /// Removes the entry carrying `id`, leaving the file untouched when there is none.
@@ -67,14 +72,49 @@ impl CodexEnvironments {
     /// # Errors
     /// Fails when the file cannot be read, is not valid TOML, or cannot be written.
     pub async fn unregister(&self, id: &str) -> Result<(), AgentError> {
-        let mut document = self.read().await?;
+        let mut document = self.file.read().await?;
         let environments = self.environments_of(&mut document)?;
         let before = environments.len();
         environments.retain(|table| Self::id_of(table) != Some(id));
         if environments.len() == before {
             return Ok(());
         }
-        self.write(&document).await
+        self.file.write(&document).await
+    }
+
+    /// The environment Codex attaches to when it is not told otherwise.
+    ///
+    /// # Errors
+    /// Fails when the file cannot be read or is not valid TOML.
+    pub async fn selected(&self) -> Result<Option<String>, AgentError> {
+        Ok(self
+            .file
+            .read()
+            .await?
+            .get(DEFAULT)
+            .and_then(|item| item.as_str())
+            .map(ToOwned::to_owned))
+    }
+
+    /// Makes `id` the environment Codex attaches to, or removes the preselection when it
+    /// is [`None`].
+    ///
+    /// Codex has no command-line switch for choosing an environment, so preselecting one
+    /// is the only way to open a session without the researcher picking it out of a menu
+    /// they did not ask for. An empty `default` is a configuration error upstream, which
+    /// is why removing the key and clearing it are the same operation here.
+    ///
+    /// # Errors
+    /// Fails when the file cannot be read, is not valid TOML, or cannot be written.
+    pub async fn select(&self, id: Option<&str>) -> Result<(), AgentError> {
+        let mut document = self.file.read().await?;
+        match id {
+            Some(id) => document[DEFAULT] = value(id),
+            None => {
+                document.remove(DEFAULT);
+            }
+        }
+        self.file.write(&document).await
     }
 
     /// The remote command line, which changes into the sandbox's start directory before
@@ -115,36 +155,13 @@ impl CodexEnvironments {
         entry
             .as_array_of_tables_mut()
             .ok_or_else(|| AgentError::UnexpectedShape {
-                path: self.path.clone(),
+                path: self.path().to_path_buf(),
                 key: ENVIRONMENTS,
             })
     }
 
     fn id_of(table: &Table) -> Option<&str> {
         table.get("id")?.as_str()
-    }
-
-    async fn read(&self) -> Result<DocumentMut, AgentError> {
-        let text = match tokio::fs::read_to_string(&self.path).await {
-            Ok(text) => text,
-            Err(source) if source.kind() == std::io::ErrorKind::NotFound => {
-                return Ok(DocumentMut::new());
-            }
-            Err(source) => {
-                return Err(AgentError::Io {
-                    path: self.path.clone(),
-                    source,
-                });
-            }
-        };
-        text.parse().map_err(|source| AgentError::Toml {
-            path: self.path.clone(),
-            source,
-        })
-    }
-
-    async fn write(&self, document: &DocumentMut) -> Result<(), AgentError> {
-        write_file(&self.path, &document.to_string()).await
     }
 }
 
@@ -226,5 +243,48 @@ mod tests {
             .unwrap();
 
         assert_eq!(tokio::fs::read_to_string(&path).await.unwrap(), original);
+    }
+
+    #[tokio::test]
+    async fn a_preselection_can_be_read_back_and_then_put_back_as_it_was() {
+        let directory = TempDir::new().unwrap();
+        let path = directory.path().join("environments.toml");
+        tokio::fs::write(&path, "default = \"laptop\"\n")
+            .await
+            .unwrap();
+        let environments = CodexEnvironments::new(path.clone());
+
+        assert_eq!(
+            environments.selected().await.unwrap().as_deref(),
+            Some("laptop")
+        );
+        environments.select(Some("alpha")).await.unwrap();
+        assert_eq!(
+            environments.selected().await.unwrap().as_deref(),
+            Some("alpha")
+        );
+        environments.select(Some("laptop")).await.unwrap();
+
+        assert_eq!(
+            tokio::fs::read_to_string(&path).await.unwrap(),
+            "default = \"laptop\"\n",
+            "a researcher who had a default environment must get exactly it back"
+        );
+    }
+
+    #[tokio::test]
+    async fn clearing_a_preselection_removes_the_key_rather_than_emptying_it() {
+        let directory = TempDir::new().unwrap();
+        let path = directory.path().join("environments.toml");
+        let environments = CodexEnvironments::new(path.clone());
+
+        environments.select(Some("alpha")).await.unwrap();
+        environments.select(None).await.unwrap();
+
+        let stored = tokio::fs::read_to_string(&path).await.unwrap();
+        assert!(
+            !stored.contains(DEFAULT),
+            "codex refuses an empty default environment id, so the key has to go: {stored}"
+        );
     }
 }

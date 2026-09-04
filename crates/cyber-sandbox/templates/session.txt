@@ -10,5 +10,5 @@ Every packet it sends is audited or refused. Follow them from another terminal:
 
 Come back to this session later with:
 
-  cyber-sandbox shell --resume {{ id }}
+  cyber-sandbox {{ command }} --resume {{ id }}
 
