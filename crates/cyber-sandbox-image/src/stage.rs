@@ -74,6 +74,8 @@ impl BuildContext {
             &rendered.claude_settings,
         )
         .await?;
+        write_file(&directory.join("sudoers"), &rendered.sudoers).await?;
+        write_file(&directory.join("detonate.sh"), &rendered.detonate).await?;
 
         Ok(Self {
             directory,

@@ -25,6 +25,7 @@ const BASE: &[&str] = &[
     "python3-pip",
     "python3-venv",
     "ripgrep",
+    "sudo",
     "tmux",
     "util-linux",
     "vim",
