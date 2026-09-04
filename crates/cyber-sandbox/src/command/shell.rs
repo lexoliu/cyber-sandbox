@@ -2,7 +2,12 @@ use std::os::unix::process::CommandExt as _;
 
 use anyhow::{Context as _, Result};
 
-use crate::{cli, command::banner, host::Host, provision};
+use crate::{
+    cli,
+    command::{banner, shell_quote},
+    host::Host,
+    provision,
+};
 
 /// Opens a shell, or runs a command, inside an isolated research session.
 ///
@@ -50,20 +55,9 @@ fn remote_command(work_dir: &str, command: &[String]) -> String {
     format!("cd {} && {run}", shell_quote(work_dir))
 }
 
-/// Quotes `value` for a POSIX shell, since the remote command is interpreted by one.
-fn shell_quote(value: &str) -> String {
-    format!("'{}'", value.replace('\'', r"'\''"))
-}
-
 #[cfg(test)]
 mod tests {
-    use super::{remote_command, shell_quote};
-
-    #[test]
-    fn a_path_holding_a_quote_cannot_escape_the_remote_command() {
-        assert_eq!(shell_quote("/srv/work"), "'/srv/work'");
-        assert_eq!(shell_quote("/srv/it's"), r"'/srv/it'\''s'");
-    }
+    use super::remote_command;
 
     #[test]
     fn a_session_starts_where_the_samples_are_mounted() {

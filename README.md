@@ -27,11 +27,12 @@ dies, the redirect target stops listening and egress fails closed.
 ## Use
 
 ```sh
-cyber-sandbox shell --samples ~/samples   # a new session, with samples mounted read-only
-cyber-sandbox codex  --samples ~/samples  # the same, with Codex driving it
+cyber-sandbox shell  --samples ~/samples  # a new session, with samples mounted read-only
+cyber-sandbox claude --samples ~/samples  # the same, with Claude Code driving it
+cyber-sandbox codex  --samples ~/samples  # or Codex
 cyber-sandbox audit c0ffee                # follow every packet that session sends
 cyber-sandbox shell --resume              # pick a session to come back to
-cyber-sandbox codex --resume c0ffee       # or name it
+cyber-sandbox claude --resume c0ffee      # or name it
 ```
 
 The first run builds the Kali image with the gateway compiled into it, from the checkout
@@ -43,9 +44,32 @@ session rather than a flag on an existing one.
 
 ## Agents
 
-`cyber-sandbox codex` opens a session and hands it to Codex, running with approvals off:
-the session is the sandbox, so an agent that stops to ask for permission to read a file is
-one you have to babysit for no gain.
+`cyber-sandbox claude` and `cyber-sandbox codex` open a session and hand it to an agent
+running with approvals off: the session is the sandbox, so an agent that stops to ask for
+permission to read a file is one you have to babysit for no gain.
+
+Both keep your subscription. Neither is given anything that could be used to log in as
+you after the run.
+
+### Claude Code
+
+Claude Code runs inside the session, because that is where the sample is. What stays on
+the host is the login: cyber-sandbox reads the access token out of your Keychain, serves
+it over a unix socket, and forwards that socket into the session over ssh. Inside, a
+courier fetches the token, writes it where Claude Code looks for a host-managed
+credential, starts Claude Code, and fetches again every five minutes so a token renewed on
+the host reaches the session without the session ever holding what renews it.
+
+The refresh token never crosses. What the session gets is the access token, which expires
+in hours on its own, is readable only by the account the agent runs as, and is taken off
+the disk when the agent exits. Even a copy taken while the agent ran is inert afterwards:
+Claude Code checks that the process the credential names is still alive and was started
+when the file says it was.
+
+Your own `claude` is untouched — the Keychain item is read, never rewritten, so nothing
+here can make you log in again.
+
+### Codex
 
 Codex itself never leaves the host. Your ChatGPT subscription, and the credential behind
 it, stay where they already are; what runs in the session is `codex exec-server`, which
@@ -71,8 +95,10 @@ host does not have is one where Codex quietly runs the command on your laptop in
 | `cyber-sandbox-runtime` | Typed driver for the `container` CLI |
 | `cyber-sandbox-image` | Renders the Dockerfile, entrypoint and egress policy |
 | `cyber-sandbox-gateway` | The in-guest auditing proxy (Linux only) |
+| `cyber-sandbox-courier` | Holds an agent's borrowed credential in-guest (Linux only) |
+| `cyber-sandbox-creds` | The borrowed credential's wire and on-disk formats |
 | `cyber-sandbox-audit` | Audit record schema and JSONL reader/writer |
-| `cyber-sandbox-agents` | Registers a session with Claude Code and Codex |
+| `cyber-sandbox-agents` | Reads the host's logins and registers a session with Codex |
 
 ## Requirements
 

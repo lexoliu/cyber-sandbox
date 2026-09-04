@@ -42,6 +42,8 @@ pub struct SandboxLayout {
     pub samples_dir: PathBuf,
     /// Writable working directory for the researcher account.
     pub work_dir: PathBuf,
+    /// Directory the host's per-attachment sockets and credential files live in.
+    pub runtime_dir: PathBuf,
 }
 
 impl Default for SandboxLayout {
@@ -71,6 +73,10 @@ impl Default for SandboxLayout {
             authorized_keys: PathBuf::from("/etc/ssh/authorized_keys.d/researcher"),
             samples_dir: PathBuf::from("/samples"),
             work_dir: PathBuf::from("/work"),
+            // Reachable by the researcher account alone: everything written here is
+            // written for one process and read by it, and the courier takes the
+            // credential it wrote back off the disk when the agent it served exits.
+            runtime_dir: PathBuf::from("/run/cyber-sandbox"),
         }
     }
 }

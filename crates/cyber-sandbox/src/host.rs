@@ -11,7 +11,10 @@ use cyber_sandbox_agents::{
 use cyber_sandbox_image::SandboxLayout;
 use cyber_sandbox_runtime::{AppleContainer, Committed, ContainerName, HostBudget, RunState};
 
-use crate::session::{SessionId, SessionRecord};
+use crate::{
+    loan::Attachment,
+    session::{SessionId, SessionRecord},
+};
 
 /// Directory under the user's home holding everything cyber-sandbox owns.
 const STATE_DIRECTORY: &str = ".cyber-sandbox";
@@ -134,6 +137,16 @@ impl Host {
     #[must_use]
     pub fn build_directory(&self) -> PathBuf {
         self.state.join("build")
+    }
+
+    /// Socket one opening of a session fetches its borrowed token over.
+    ///
+    /// Under the state directory rather than the system's temporary one so that its
+    /// permissions are the researcher's own, and named for the opening rather than the
+    /// session so that two agents in one machine cannot be handed each other's socket.
+    #[must_use]
+    pub fn loan_socket(&self, attachment: &Attachment) -> PathBuf {
+        self.state.join("run").join(attachment.socket_name())
     }
 
     /// The address the session's machine is answering on right now.

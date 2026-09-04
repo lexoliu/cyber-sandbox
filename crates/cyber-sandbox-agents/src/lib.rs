@@ -1,12 +1,14 @@
-//! Registration of a sandbox with the host's agents.
+//! What the host's agents need before a session can run them.
 //!
-//! Both Claude Code and Codex can keep their model side — and with it the credentials —
-//! on the host while running their tool side over SSH. This crate writes the two
-//! configuration entries that arrange it, so the sandbox never needs a token of its own
-//! and never needs egress to be usable as a research environment.
+//! The two agents want opposite things. Codex keeps its model side — and with it the
+//! credential — on the host and runs only its tool side in the session, which takes an
+//! entry in its own configuration file. Claude Code runs whole inside the session and is
+//! lent the researcher's access token to do it, which takes reading the login the
+//! researcher already has. So this crate both edits Codex's files and reads Claude's
+//! keychain entry, and neither agent ever needs the session to have a login of its own.
 //!
-//! Existing configuration is preserved: Claude's settings are edited as JSON and Codex's
-//! files as TOML documents, so hand-written entries and comments survive.
+//! Existing configuration is preserved: Codex's files are edited as TOML documents, so
+//! hand-written entries and comments survive, and Claude's keychain entry is only read.
 
 mod claude;
 mod codex;
@@ -14,34 +16,30 @@ mod endpoint;
 mod error;
 mod toml_file;
 
-pub use claude::{ClaudeSettings, SshConfig};
+pub use claude::ClaudeLogin;
 pub use codex::{Codex, CodexConfig, CodexEnvironments};
 pub use endpoint::SandboxEndpoint;
 pub use error::AgentError;
 
 use std::path::{Path, PathBuf};
 
-/// The two host-side configuration files a sandbox registers itself in.
+/// The host-side configuration a sandbox writes itself into.
+///
+/// Only Codex has any: Claude Code is run inside the session rather than pointed at it,
+/// so there is nothing about a session for the host's Claude Code to remember, and
+/// nothing left behind when one ends.
 #[derive(Debug, Clone)]
 pub struct AgentIntegration {
-    claude: ClaudeSettings,
     codex: Codex,
 }
 
 impl AgentIntegration {
-    /// Locates both configuration files under `home`.
+    /// Locates the configuration under `home`.
     #[must_use]
     pub fn for_home(home: &Path) -> Self {
         Self {
-            claude: ClaudeSettings::new(home.join(".claude").join("settings.json")),
             codex: Codex::for_home(home),
         }
-    }
-
-    /// Claude Code's settings, where the sandbox appears as an SSH configuration.
-    #[must_use]
-    pub fn claude(&self) -> &ClaudeSettings {
-        &self.claude
     }
 
     /// Codex's configuration, where the sandbox appears as a stdio-over-SSH environment.
@@ -50,12 +48,11 @@ impl AgentIntegration {
         &self.codex
     }
 
-    /// Removes the entries belonging to `id` from both agents.
+    /// Removes the entries belonging to `id`.
     ///
     /// # Errors
-    /// Fails when either file cannot be read, parsed or written.
+    /// Fails when a file cannot be read, parsed or written.
     pub async fn unregister(&self, id: &str) -> Result<(), AgentError> {
-        self.claude.unregister(id).await?;
         self.codex.unregister(id).await
     }
 }

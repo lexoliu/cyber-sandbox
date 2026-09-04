@@ -1,233 +1,292 @@
-//! Claude Code's `sshConfigs` entry for a sandbox.
+//! The researcher's own Claude Code login, read so a session can borrow from it.
 //!
-//! Claude Code runs the agent — and therefore the credential — on the host and reaches
-//! the sandbox over SSH, exposing its own API socket to the remote side as a forwarded
-//! unix socket. Registering a sandbox is a matter of adding one entry to `sshConfigs` in
-//! `~/.claude/settings.json`; everything else in the user's settings is left alone.
+//! Claude Code keeps its login in the login keychain, under a service name it derives
+//! from which configuration directory it was started with. Reading it is how a session
+//! gets to be the researcher's own subscription rather than a second account: the copy of
+//! Claude Code inside the sandbox is handed the same OAuth bearer the copy outside uses,
+//! and so reports the same usage and sees the same subscription connectors.
+//!
+//! Only the access token is taken. The refresh token beside it is what the researcher's
+//! own Claude Code renews its login with, and renewing rotates it — so a second process
+//! spending it would log the researcher out of their own machine. This module never
+//! writes the keychain, never refreshes, and never deserialises the refresh token at all.
 
-use std::path::{Path, PathBuf};
+use std::env;
 
-use serde::{Deserialize, Serialize};
-use serde_json::{Map, Value};
-use tokio::fs;
+use cyber_sandbox_creds::Bearer;
+use jiff::Timestamp;
+use serde::Deserialize;
+use sha2::{Digest as _, Sha256};
+use unicode_normalization::UnicodeNormalization as _;
 
-use crate::{endpoint::SandboxEndpoint, error::AgentError, write_file};
+use crate::error::AgentError;
 
-/// Settings key holding the list of SSH connections Claude Code offers.
-const SSH_CONFIGS: &str = "sshConfigs";
+/// Environment variable naming the directory Claude Code keeps its configuration in.
+const CONFIG_DIR: &str = "CLAUDE_CONFIG_DIR";
 
-/// One entry of Claude Code's `sshConfigs` array.
-///
-/// The field names are Claude Code's own settings schema, camel case on the wire.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct SshConfig {
-    /// Identifier `claude ssh <id>` takes, and the key entries are matched on.
-    pub id: String,
-    /// Name shown in Claude Code's connection picker.
-    pub name: String,
-    /// `user@host` the connection is made to.
-    pub ssh_host: String,
-    /// Port sshd listens on.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub ssh_port: Option<u16>,
-    /// Private key the host authenticates with.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub ssh_identity_file: Option<String>,
-    /// Directory the agent starts in on the remote side.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub start_directory: Option<String>,
+/// Environment variable that overrides the above for stored secrets alone.
+const SECURESTORAGE_CONFIG_DIR: &str = "CLAUDE_SECURESTORAGE_CONFIG_DIR";
+
+/// Keychain service name for a Claude Code running out of its default directory.
+const DEFAULT_SERVICE: &str = "Claude Code-credentials";
+
+/// Account name Claude Code falls back to when the user's own is unusable as one.
+const FALLBACK_ACCOUNT: &str = "claude-code-user";
+
+/// Characters Claude Code accepts in the account name before falling back.
+fn is_account_character(character: char) -> bool {
+    character.is_ascii_alphanumeric() || matches!(character, '.' | '_' | '-')
 }
 
-impl From<&SandboxEndpoint> for SshConfig {
-    fn from(endpoint: &SandboxEndpoint) -> Self {
+/// The keychain entry holding the researcher's Claude Code login.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ClaudeLogin {
+    service: String,
+    account: String,
+}
+
+impl ClaudeLogin {
+    /// Works out which entry this machine's Claude Code would be using.
+    ///
+    /// A Claude Code pointed at a configuration directory of its own stores its login
+    /// under a service name carrying a digest of that directory, so that two of them side
+    /// by side are two logins. Following the same derivation is what lets a session
+    /// borrow from whichever one the researcher actually runs.
+    #[must_use]
+    pub fn discover() -> Self {
         Self {
-            id: endpoint.id.clone(),
-            name: format!("cyber-sandbox {}", endpoint.id),
-            ssh_host: endpoint.destination(),
-            ssh_port: Some(endpoint.port),
-            ssh_identity_file: Some(endpoint.identity_file.display().to_string()),
-            start_directory: Some(endpoint.start_directory.display().to_string()),
+            service: service(),
+            account: account(),
         }
     }
-}
 
-/// Claude Code's settings file, edited in place.
-#[derive(Debug, Clone)]
-pub struct ClaudeSettings {
-    path: PathBuf,
-}
-
-impl ClaudeSettings {
-    /// Points at the settings file to edit.
+    /// Keychain service name being read.
     #[must_use]
-    pub fn new(path: PathBuf) -> Self {
-        Self { path }
+    pub fn service(&self) -> &str {
+        &self.service
     }
 
-    /// Path being edited.
+    /// Keychain account name being read.
     #[must_use]
-    pub fn path(&self) -> &Path {
-        &self.path
+    pub fn account(&self) -> &str {
+        &self.account
     }
 
-    /// Adds `endpoint`, replacing any entry that already carries the same id.
+    /// Reads the login and answers with the part of it a session may borrow.
     ///
     /// # Errors
-    /// Fails when the settings cannot be read, are not a JSON object, or cannot be written.
-    pub async fn register(&self, endpoint: &SandboxEndpoint) -> Result<(), AgentError> {
-        let mut settings = self.read().await?;
-        let mut configs = self.configs_of(&settings)?;
-        configs.retain(|config| config.id != endpoint.id);
-        configs.push(SshConfig::from(endpoint));
-        self.store(&mut settings, configs)?;
-        self.write(&settings).await
-    }
-
-    /// Removes the entry carrying `id`, leaving the file untouched when there is none.
-    ///
-    /// # Errors
-    /// Fails when the settings cannot be read, are not a JSON object, or cannot be written.
-    pub async fn unregister(&self, id: &str) -> Result<(), AgentError> {
-        let mut settings = self.read().await?;
-        let mut configs = self.configs_of(&settings)?;
-        let before = configs.len();
-        configs.retain(|config| config.id != id);
-        if configs.len() == before {
-            return Ok(());
-        }
-        self.store(&mut settings, configs)?;
-        self.write(&settings).await
-    }
-
-    async fn read(&self) -> Result<Map<String, Value>, AgentError> {
-        let text = match fs::read_to_string(&self.path).await {
-            Ok(text) => text,
-            Err(source) if source.kind() == std::io::ErrorKind::NotFound => {
-                return Ok(Map::new());
-            }
-            Err(source) => {
-                return Err(AgentError::Io {
-                    path: self.path.clone(),
-                    source,
-                });
-            }
-        };
-        if text.trim().is_empty() {
-            return Ok(Map::new());
-        }
-        let value: Value = serde_json::from_str(&text).map_err(|source| AgentError::Json {
-            path: self.path.clone(),
-            source,
-        })?;
-        match value {
-            Value::Object(settings) => Ok(settings),
-            _ => Err(AgentError::NotAnObject {
-                path: self.path.clone(),
+    /// Fails when there is no login to borrow from, when the keychain refuses, when what
+    /// is stored is not what Claude Code writes, and when the token has already expired —
+    /// which only the researcher's own Claude Code can put right, by being run once.
+    pub async fn bearer(&self) -> Result<Bearer, AgentError> {
+        let stored = self.read().await?;
+        let bearer = stored.into_bearer(&self.service)?;
+        match bearer.expires_at {
+            Some(expiry) if expiry <= Timestamp::now() => Err(AgentError::LoginExpired {
+                service: self.service.clone(),
+                expired_at: expiry,
             }),
+            _ => Ok(bearer),
         }
     }
 
-    fn configs_of(&self, settings: &Map<String, Value>) -> Result<Vec<SshConfig>, AgentError> {
-        let Some(value) = settings.get(SSH_CONFIGS) else {
-            return Ok(Vec::new());
-        };
-        serde_json::from_value(value.clone()).map_err(|source| AgentError::Json {
-            path: self.path.clone(),
+    /// Fetches and parses the keychain entry.
+    ///
+    /// The read happens on a blocking thread because the keychain is entitled to stop and
+    /// ask the researcher whether this program may have the secret, and a dialog box is
+    /// not something an executor thread can wait on.
+    async fn read(&self) -> Result<StoredLogin, AgentError> {
+        let service = self.service.clone();
+        let account = self.account.clone();
+        let secret = tokio::task::spawn_blocking(move || {
+            security_framework::passwords::get_generic_password(&service, &account)
+        })
+        .await
+        .map_err(|source| AgentError::KeychainUnreachable {
+            service: self.service.clone(),
+            source,
+        })?
+        .map_err(|source| {
+            if source.code() == ITEM_NOT_FOUND {
+                AgentError::NoLogin {
+                    service: self.service.clone(),
+                }
+            } else {
+                AgentError::Keychain {
+                    service: self.service.clone(),
+                    source,
+                }
+            }
+        })?;
+
+        serde_json::from_slice(&secret).map_err(|source| AgentError::StoredLogin {
+            service: self.service.clone(),
             source,
         })
     }
+}
 
-    fn store(
-        &self,
-        settings: &mut Map<String, Value>,
-        configs: Vec<SshConfig>,
-    ) -> Result<(), AgentError> {
-        let value = serde_json::to_value(configs).map_err(|source| AgentError::Json {
-            path: self.path.clone(),
-            source,
+/// What the keychain answers with when nothing is stored under the name asked for.
+const ITEM_NOT_FOUND: i32 = -25300;
+
+/// The keychain entry, read for the one field a session is allowed to see.
+///
+/// `refreshToken` and `refreshTokenExpiresAt` are in the stored JSON and are deliberately
+/// absent here. Serde ignores what it is not asked for, so the credential that could mint
+/// further tokens is never even decoded, let alone carried anywhere.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct StoredLogin {
+    claude_ai_oauth: Option<StoredOauth>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct StoredOauth {
+    access_token: String,
+    #[serde(default, with = "jiff::fmt::serde::timestamp::millisecond::optional")]
+    expires_at: Option<Timestamp>,
+}
+
+impl StoredLogin {
+    /// Takes the access token out, refusing a login that is not an OAuth one.
+    fn into_bearer(self, service: &str) -> Result<Bearer, AgentError> {
+        let oauth = self.claude_ai_oauth.ok_or_else(|| AgentError::NotOauth {
+            service: service.to_owned(),
         })?;
-        settings.insert(SSH_CONFIGS.to_owned(), value);
-        Ok(())
+        Ok(Bearer {
+            token: oauth.access_token,
+            expires_at: oauth.expires_at,
+        })
     }
+}
 
-    async fn write(&self, settings: &Map<String, Value>) -> Result<(), AgentError> {
-        let mut text =
-            serde_json::to_string_pretty(settings).map_err(|source| AgentError::Json {
-                path: self.path.clone(),
-                source,
-            })?;
-        text.push('\n');
-        write_file(&self.path, &text).await
+/// The keychain service name Claude Code would use on this machine.
+fn service() -> String {
+    let Some(directory) = distinct_config_dir() else {
+        return DEFAULT_SERVICE.to_owned();
+    };
+    let digest = Sha256::digest(directory.as_bytes());
+    format!(
+        "{DEFAULT_SERVICE}-{:02x}{:02x}{:02x}{:02x}",
+        digest[0], digest[1], digest[2], digest[3]
+    )
+}
+
+/// The configuration directory, when it is one that earns a service name of its own.
+///
+/// Claude Code treats the variables as unset when they are empty, and a login stored by
+/// a default installation carries no digest — so the answer here is `None` far more often
+/// than not.
+fn distinct_config_dir() -> Option<String> {
+    match env::var(SECURESTORAGE_CONFIG_DIR) {
+        // Set at all means it decides, including deciding to be the default by being empty.
+        Ok(directory) if directory.is_empty() => None,
+        Ok(directory) => Some(normalised(&directory)),
+        Err(_) => match env::var(CONFIG_DIR) {
+            Ok(directory) if !directory.is_empty() => Some(normalised(&directory)),
+            _ => None,
+        },
     }
+}
+
+/// The path as Claude Code digests it.
+///
+/// macOS hands out decomposed paths in places Finder has been, so the same directory can
+/// arrive spelled two ways; Claude Code composes before digesting and so must this.
+fn normalised(directory: &str) -> String {
+    directory.nfc().collect()
+}
+
+/// The keychain account name Claude Code would use on this machine.
+fn account() -> String {
+    let name = env::var("USER")
+        .ok()
+        .or_else(|| std::env::var("LOGNAME").ok())
+        .unwrap_or_default();
+    if name.is_empty() || !name.chars().all(is_account_character) {
+        return FALLBACK_ACCOUNT.to_owned();
+    }
+    name
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tempfile::TempDir;
 
-    fn endpoint(id: &str) -> SandboxEndpoint {
-        SandboxEndpoint {
-            id: id.to_owned(),
-            user: "researcher".to_owned(),
-            host: "192.168.64.7".to_owned(),
-            port: 22,
-            identity_file: PathBuf::from("/keys/id_ed25519"),
-            known_hosts: PathBuf::from("/keys/known_hosts"),
-            start_directory: PathBuf::from("/work"),
-        }
+    #[test]
+    fn a_default_installation_is_read_under_the_plain_name() {
+        assert_eq!(DEFAULT_SERVICE, "Claude Code-credentials");
     }
 
-    #[tokio::test]
-    async fn registering_preserves_unrelated_settings_and_replaces_by_id() {
-        let directory = TempDir::new().unwrap();
-        let path = directory.path().join("settings.json");
-        tokio::fs::write(&path, "{\"model\":\"opus\",\"sshConfigs\":[]}")
-            .await
-            .unwrap();
-        let settings = ClaudeSettings::new(path.clone());
+    #[test]
+    fn only_the_access_token_is_taken_out_of_what_is_stored() {
+        let stored: StoredLogin = serde_json::from_str(
+            r#"{"claudeAiOauth":{"accessToken":"sk-ant-oat01-borrowed",
+                 "refreshToken":"sk-ant-ort01-must-never-leave",
+                 "expiresAt":1788521737675,"refreshTokenExpiresAt":1790000000000,
+                 "scopes":["user:inference"],"subscriptionType":"max"}}"#,
+        )
+        .unwrap();
 
-        settings.register(&endpoint("alpha")).await.unwrap();
-        settings.register(&endpoint("alpha")).await.unwrap();
-        settings.register(&endpoint("beta")).await.unwrap();
+        let bearer = stored.into_bearer("Claude Code-credentials").unwrap();
 
-        let stored: Value =
-            serde_json::from_str(&tokio::fs::read_to_string(&path).await.unwrap()).unwrap();
-        assert_eq!(stored["model"], "opus");
-        let configs = stored[SSH_CONFIGS].as_array().unwrap();
-        assert_eq!(configs.len(), 2);
-        assert_eq!(configs[0]["id"], "alpha");
-        assert_eq!(configs[0]["sshHost"], "researcher@192.168.64.7");
-        assert_eq!(configs[0]["startDirectory"], "/work");
+        assert_eq!(bearer.token, "sk-ant-oat01-borrowed");
+        assert_eq!(
+            bearer.expires_at,
+            Some(Timestamp::from_millisecond(1_788_521_737_675).unwrap())
+        );
+        let carried = serde_json::to_string(&bearer).unwrap();
+        assert!(
+            !carried.contains("ort01"),
+            "the refresh token is what renews the researcher's own login, and renewing \
+             rotates it: a session that spent it would log them out of their machine — \
+             {carried}"
+        );
     }
 
-    #[tokio::test]
-    async fn unregistering_an_absent_id_leaves_the_file_alone() {
-        let directory = TempDir::new().unwrap();
-        let path = directory.path().join("settings.json");
-        let original = "{\"model\":\"opus\"}";
-        tokio::fs::write(&path, original).await.unwrap();
+    #[test]
+    fn a_login_that_is_not_a_subscription_is_refused_rather_than_half_used() {
+        let stored: StoredLogin = serde_json::from_str(r#"{"someOtherProvider":{}}"#).unwrap();
 
-        ClaudeSettings::new(path.clone())
-            .unregister("absent")
-            .await
-            .unwrap();
-
-        assert_eq!(tokio::fs::read_to_string(&path).await.unwrap(), original);
+        assert!(matches!(
+            stored.into_bearer("Claude Code-credentials"),
+            Err(AgentError::NotOauth { .. })
+        ));
     }
 
-    #[tokio::test]
-    async fn a_missing_settings_file_is_created_with_only_the_new_entry() {
-        let directory = TempDir::new().unwrap();
-        let path = directory.path().join("nested").join("settings.json");
-        ClaudeSettings::new(path.clone())
-            .register(&endpoint("alpha"))
-            .await
-            .unwrap();
+    #[test]
+    fn an_account_name_a_keychain_would_not_take_falls_back_the_way_claude_code_does() {
+        assert!(is_account_character('a') && is_account_character('.'));
+        assert!(!is_account_character('/'));
+        assert_eq!(FALLBACK_ACCOUNT, "claude-code-user");
+    }
 
-        let stored: Value =
-            serde_json::from_str(&tokio::fs::read_to_string(&path).await.unwrap()).unwrap();
-        assert_eq!(stored[SSH_CONFIGS].as_array().unwrap().len(), 1);
+    #[test]
+    fn a_configuration_directory_of_its_own_earns_a_service_name_of_its_own() {
+        // The digest Claude Code computes: the first four bytes of the SHA-256 of the
+        // composed path, hex, appended to the plain name.
+        let digest = Sha256::digest("/Users/researcher/.claude-work".as_bytes());
+        let expected = format!(
+            "{DEFAULT_SERVICE}-{:02x}{:02x}{:02x}{:02x}",
+            digest[0], digest[1], digest[2], digest[3]
+        );
+
+        assert_eq!(expected.len(), DEFAULT_SERVICE.len() + 9);
+        assert_ne!(expected, DEFAULT_SERVICE);
+    }
+
+    #[test]
+    fn the_same_directory_spelled_two_ways_is_read_under_one_name() {
+        let composed = "/Users/researcher/café";
+        let decomposed = "/Users/researcher/cafe\u{301}";
+
+        assert_ne!(composed, decomposed);
+        assert_eq!(
+            normalised(composed),
+            normalised(decomposed),
+            "macOS hands out decomposed paths where Finder has been, and a login found \
+             under one spelling must be found under the other"
+        );
     }
 }

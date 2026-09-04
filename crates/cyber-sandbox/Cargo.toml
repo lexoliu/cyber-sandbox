@@ -11,6 +11,7 @@ rust-version.workspace = true
 [dependencies]
 cyber-sandbox-agents.workspace = true
 cyber-sandbox-audit = { workspace = true, features = ["io"] }
+cyber-sandbox-creds.workspace = true
 cyber-sandbox-image.workspace = true
 cyber-sandbox-runtime.workspace = true
 anyhow.workspace = true
@@ -26,6 +27,9 @@ thiserror.workspace = true
 tokio.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
 
 [lints]
 workspace = true

@@ -1,7 +1,12 @@
 use askama::Template;
 use cyber_sandbox_runtime::Arch;
 
-use crate::{layout::SandboxLayout, openssh::OpenSshBuild, profile::ToolProfile};
+use crate::{
+    layout::SandboxLayout,
+    onboarding::{Configuration, Settings},
+    openssh::OpenSshBuild,
+    profile::ToolProfile,
+};
 
 /// The image definition itself.
 #[derive(Debug, Template)]
@@ -68,6 +73,10 @@ pub struct Entrypoint {
     pub authorized_keys: String,
     /// Directory work happens in, which the agent's path is aliased to.
     pub work_dir: String,
+    /// Researcher account name, which owns the runtime directory.
+    pub researcher_user: String,
+    /// Directory the host's per-attachment sockets and credential files live in.
+    pub runtime_dir: String,
     /// Transparent proxy port.
     pub proxy_port: u16,
     /// Intercepting resolver port.
@@ -99,6 +108,10 @@ pub struct RenderedImage {
     pub egress_policy: String,
     /// Contents of `sshd_config`.
     pub sshd_config: String,
+    /// Contents of the researcher account's `~/.claude.json`.
+    pub claude_config: String,
+    /// Contents of the researcher account's `~/.claude/settings.json`.
+    pub claude_settings: String,
 }
 
 impl RenderedImage {
@@ -107,6 +120,10 @@ impl RenderedImage {
     /// # Errors
     /// Fails only when a template is malformed, which the compiler already rejects, or
     /// when rendering runs out of memory.
+    ///
+    /// # Panics
+    /// Panics if the agent configuration cannot be serialised, which would mean a struct
+    /// in [`crate::onboarding`] had grown a field serde cannot represent as JSON.
     pub fn render(
         base_image: &str,
         arch: Arch,
@@ -144,6 +161,8 @@ impl RenderedImage {
             ca_certificate: layout.ca_certificate().display().to_string(),
             authorized_keys: layout.authorized_keys.display().to_string(),
             work_dir: layout.work_dir.display().to_string(),
+            researcher_user: layout.researcher.name.clone(),
+            runtime_dir: layout.runtime_dir.display().to_string(),
             proxy_port: layout.proxy_port,
             dns_port: layout.dns_port,
             nflog_group: layout.nflog_group,
@@ -155,11 +174,17 @@ impl RenderedImage {
             researcher_user: layout.researcher.name.clone(),
         }
         .render()?;
+        let claude_config = serde_json::to_string_pretty(&Configuration::for_layout(layout))
+            .expect("the agent configuration is representable as JSON");
+        let claude_settings = serde_json::to_string_pretty(&Settings::new())
+            .expect("the agent settings are representable as JSON");
         Ok(Self {
             dockerfile,
             entrypoint,
             egress_policy,
             sshd_config,
+            claude_config,
+            claude_settings,
         })
     }
 }
@@ -293,6 +318,42 @@ mod tests {
     }
 
     #[test]
+    fn the_first_run_questions_are_answered_for_the_directory_the_agent_opens_in() {
+        let layout = SandboxLayout::default();
+        let rendered = rendered();
+        let configuration: serde_json::Value =
+            serde_json::from_str(&rendered.claude_config).unwrap();
+        assert_eq!(configuration["hasCompletedOnboarding"], true);
+        assert_eq!(
+            configuration["projects"][layout.work_dir.to_str().unwrap()]["hasTrustDialogAccepted"],
+            true,
+            "the directory is one this image made, and being asked to trust it would \
+             stop an agent nobody is sitting in front of"
+        );
+
+        let settings: serde_json::Value = serde_json::from_str(&rendered.claude_settings).unwrap();
+        assert_eq!(settings["skipDangerousModePermissionPrompt"], true);
+        assert!(
+            settings["theme"].is_string(),
+            "an unanswered theme is a picker the session opens on instead of the work"
+        );
+    }
+
+    #[test]
+    fn the_answers_are_installed_where_the_agent_reads_them() {
+        let dockerfile = rendered().dockerfile;
+        assert!(dockerfile.contains("COPY claude.json /home/researcher/.claude.json"));
+        assert!(
+            dockerfile.contains("COPY claude-settings.json /home/researcher/.claude/settings.json")
+        );
+        assert!(
+            dockerfile.contains("chmod 0600 /home/researcher/.claude.json"),
+            "the file the agent's own settings live in is not one other accounts in the \
+             session should be able to rewrite"
+        );
+    }
+
+    #[test]
     fn the_headless_profile_adds_the_kali_metapackage() {
         assert!(
             ToolProfile::Headless
@@ -304,6 +365,62 @@ mod tests {
                 .packages()
                 .contains(&"kali-linux-headless".to_owned())
         );
+    }
+
+    #[test]
+    fn the_courier_is_built_from_the_same_tree_and_installed_for_the_researcher() {
+        let dockerfile = rendered().dockerfile;
+        assert!(
+            dockerfile.contains("-p cyber-sandbox-gateway -p cyber-sandbox-courier"),
+            "the courier writes the credentials file the host's own crate defines, so \
+             building it from anything but this tree would let the two formats drift: \
+             {dockerfile}"
+        );
+        assert!(
+            dockerfile.contains("/src/target/release/cyber-sandbox-courier"),
+            "{dockerfile}"
+        );
+        assert!(
+            !dockerfile.contains("setcap cap_net_admin+ep /usr/local/bin/cyber-sandbox-courier"),
+            "the courier holds a credential and must therefore hold no privilege"
+        );
+    }
+
+    #[test]
+    fn the_credential_lands_somewhere_only_the_researcher_account_can_reach() {
+        let entrypoint = rendered().entrypoint;
+        assert!(
+            entrypoint.contains("install -d -o researcher -g researcher -m 0700"),
+            "a mode any wider would let a sample running beside the agent read the token \
+             out of the file, or take it by connecting to the socket: {entrypoint}"
+        );
+        let make_at = entrypoint.find("\"${RUNTIME_DIR}\"").unwrap();
+        let sshd_at = entrypoint.find("/usr/sbin/sshd").unwrap();
+        assert!(
+            make_at < sshd_at,
+            "sshd binds the forwarded socket before the command runs, so the directory \
+             has to exist before sshd does"
+        );
+    }
+
+    #[test]
+    fn no_credential_bearing_variable_survives_the_ssh_connection() {
+        let config = rendered().sshd_config;
+        let accepted = config
+            .lines()
+            .find(|line| line.starts_with("AcceptEnv"))
+            .unwrap();
+        assert_eq!(
+            accepted, "AcceptEnv LANG LC_*",
+            "a token accepted here would sit in sshd's child environment, readable \
+             through /proc by anything else in the sandbox; the courier puts it in one \
+             process's environment instead"
+        );
+    }
+
+    #[test]
+    fn a_socket_left_by_a_killed_attachment_does_not_block_the_next_one() {
+        assert!(rendered().sshd_config.contains("StreamLocalBindUnlink yes"));
     }
 
     #[test]
