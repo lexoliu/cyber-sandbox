@@ -1,33 +1,43 @@
-use std::{net::IpAddr, num::NonZeroU32, path::PathBuf};
+use std::path::PathBuf;
 
 use clap::{Args, Parser, Subcommand};
 use cyber_sandbox_image::ToolProfile;
 use cyber_sandbox_runtime::{Arch, ImageReference};
+
+use crate::session::SessionId;
 
 /// Repository the sandbox image is built into.
 pub const IMAGE_REPOSITORY: &str = "localhost/cyber-sandbox";
 
 /// Tag the sandbox image for `arch` is built under and started from.
 ///
-/// The architecture is the tag rather than `latest`, because an `amd64` sandbox started
-/// from an `arm64` root filesystem is a machine that cannot execute its own userspace.
-/// A single mutable tag would make exactly that the outcome of having built both.
+/// The architecture is the tag rather than `latest`, because an `amd64` machine started
+/// from an `arm64` root filesystem is one that cannot execute its own userspace. A single
+/// mutable tag would make exactly that the outcome of having built both.
 #[must_use]
 pub fn default_image(arch: Arch) -> ImageReference {
     ImageReference::new(format!("{IMAGE_REPOSITORY}:{arch}"))
         .expect("a repository and an architecture always form a valid reference")
 }
 
-/// Kali image the sandbox derives from by default.
+/// Kali image the sandbox derives from.
 pub const DEFAULT_BASE_IMAGE: &str = "docker.io/kalilinux/kali-rolling:latest";
 
-/// Resolver the in-sandbox gateway forwards DNS to by default.
+/// How much of the Kali toolchain the sandbox image installs.
+pub const DEFAULT_PROFILE: ToolProfile = ToolProfile::Core;
+
+/// Resolver the in-sandbox gateway forwards DNS to.
 ///
 /// The gateway dials it directly, so it is the one destination the sandbox reaches
 /// without being redirected — the sandbox itself still cannot speak to it.
 pub const DEFAULT_RESOLVER: &str = "1.1.1.1";
 
 /// cyber-sandbox's command line.
+///
+/// There is nothing here for starting, stopping, listing or deleting a machine. A session
+/// is what a researcher asks for, and the virtual machine underneath it is this tool's
+/// business: it is created when a session begins, resumed when one is reopened, and
+/// reclaimed when it has gone stale or the host is short of room.
 #[derive(Debug, Parser)]
 #[command(name = "cyber-sandbox", version, about, long_about = None)]
 pub struct Cli {
@@ -38,145 +48,136 @@ pub struct Cli {
 /// The top-level commands.
 #[derive(Debug, Subcommand)]
 pub enum Command {
-    /// Reports whether the host can run sandboxes, and repairs what it can.
-    Doctor(Doctor),
-    /// Builds the sandbox image.
-    Image {
-        #[command(subcommand)]
-        command: ImageCommand,
-    },
-    /// Starts a sandbox and registers it with both agents.
-    Up(Up),
-    /// Opens a shell, or runs a command, inside a running sandbox.
+    /// Opens a shell in an isolated research session.
     Shell(Shell),
-    /// Stops a sandbox without destroying it.
-    Down(Target),
-    /// Lists the sandboxes the host knows about.
-    Ls,
-    /// Destroys a sandbox and removes it from both agents.
-    Rm(Target),
-    /// Reads the sandbox's network audit trail.
-    Audit {
-        #[command(subcommand)]
-        command: AuditCommand,
-    },
+    /// Follows a session's network audit trail.
+    Audit(Audit),
 }
 
-/// Arguments of `doctor`.
+/// Which session to work in, and how a new one is furnished.
+///
+/// Shared by every command that puts a researcher inside a machine, so that opening one
+/// with a shell and opening one with an agent cannot drift apart.
 #[derive(Debug, Args)]
-pub struct Doctor {
-    /// Start the runtime's system services when they are not already running.
-    #[arg(long)]
-    pub fix: bool,
-}
-
-/// The `image` subcommands.
-#[derive(Debug, Subcommand)]
-pub enum ImageCommand {
-    /// Renders the build context and builds the sandbox image.
-    Build(ImageBuildArgs),
-}
-
-/// Arguments of `image build`.
-#[derive(Debug, Args)]
-pub struct ImageBuildArgs {
-    /// Tag to build the image under. Defaults to the architecture being built for.
-    #[arg(long)]
-    pub tag: Option<ImageReference>,
-    /// Kali image to derive from.
-    #[arg(long, default_value = DEFAULT_BASE_IMAGE)]
-    pub base_image: String,
-    /// Guest architecture the image is built for.
-    #[arg(long, default_value = "arm64")]
-    pub arch: Arch,
-    /// How much of the Kali toolchain to install.
-    #[arg(long, default_value = "core")]
-    pub profile: ToolProfile,
-    /// Workspace holding the gateway sources the image compiles.
-    #[arg(long, default_value = ".")]
-    pub workspace: PathBuf,
-}
-
-/// Arguments of `up`.
-#[derive(Debug, Args)]
-pub struct Up {
-    /// Name of the sandbox, which is also its container name and agent entry id.
-    pub id: String,
-    /// Image to start, built on demand when the runtime does not hold it. Defaults to
-    /// the image for the architecture the sandbox runs.
-    #[arg(long)]
-    pub image: Option<ImageReference>,
-    /// Guest architecture. `amd64` runs an `x86_64` root filesystem under Rosetta.
-    #[arg(long, default_value = "arm64")]
-    pub arch: Arch,
-    /// Virtual CPUs the sandbox is given. Defaults to half of what the host can spare.
-    #[arg(long)]
-    pub cpus: Option<NonZeroU32>,
-    /// Memory in mebibytes. Defaults to half of what the host can spare.
+pub struct Attach {
+    /// Reopen a session instead of starting a new one. Without a value, pick one.
     ///
-    /// Whatever is asked for is checked against the host first: a sandbox is never given
-    /// so much that macOS is left without its own share.
-    #[arg(long)]
-    pub memory_mib: Option<NonZeroU32>,
-    /// Host directory exposed read-only as the sample source.
+    /// A bare `--resume` offers the sessions this host holds and reopens the chosen one.
+    /// There is deliberately no "most recent" shorthand: which environment untrusted code
+    /// runs in is never guessed.
+    #[arg(long, num_args = 0..=1, default_missing_value = "", value_name = "SESSION")]
+    pub resume: Option<Resume>,
+    /// Host directory exposed read-only inside the session as the sample source.
     #[arg(long)]
     pub samples: Option<PathBuf>,
-    /// Resolver the gateway forwards the sandbox's DNS questions to.
-    #[arg(long, default_value = DEFAULT_RESOLVER)]
-    pub resolver: IpAddr,
-    /// Toolchain profile used if the image has to be built first.
-    #[arg(long, default_value = "core")]
-    pub profile: ToolProfile,
-    /// Workspace used if the image has to be built first.
+    /// Guest architecture. `amd64` runs an `x86_64` root filesystem under Rosetta.
+    ///
+    /// Settled when the session is created, so it is only accepted on a resume when it
+    /// agrees with what the session already is.
+    #[arg(long)]
+    pub arch: Option<Arch>,
+    /// Checkout the audit gateway is compiled from, if the image has to be built first.
     #[arg(long, default_value = ".")]
     pub workspace: PathBuf,
-}
-
-/// A command that acts on one existing sandbox.
-#[derive(Debug, Args)]
-pub struct Target {
-    /// Name of the sandbox.
-    pub id: String,
 }
 
 /// Arguments of `shell`.
 #[derive(Debug, Args)]
 pub struct Shell {
-    /// Name of the sandbox.
-    pub id: String,
+    #[command(flatten)]
+    pub attach: Attach,
     /// Command to run instead of an interactive shell.
     #[arg(trailing_var_arg = true)]
     pub command: Vec<String>,
 }
 
-/// The `audit` subcommands.
-#[derive(Debug, Subcommand)]
-pub enum AuditCommand {
-    /// Prints the tail of the audit trail, optionally following it.
-    Tail(AuditTail),
-    /// Copies the whole audit trail out of the sandbox.
-    Export(AuditExport),
-}
-
-/// Arguments of `audit tail`.
+/// Arguments of `audit`.
 #[derive(Debug, Args)]
-pub struct AuditTail {
-    /// Name of the sandbox.
-    pub id: String,
-    /// Number of trailing records to print before following.
+pub struct Audit {
+    /// Session whose trail to follow.
+    ///
+    /// Named rather than picked: a trail read from the wrong machine is evidence about
+    /// something the researcher was not looking at.
+    pub session: SessionId,
+    /// Number of trailing records to print before catching up with the gateway.
     #[arg(long, short = 'n', default_value = "20")]
     pub lines: u32,
-    /// Keep printing records as the gateway writes them.
-    #[arg(long, short = 'f')]
-    pub follow: bool,
+    /// Print the gateway's own JSONL rather than one rendered line per event.
+    ///
+    /// An exported trail is evidence, so this is byte-for-byte what the gateway recorded.
+    #[arg(long)]
+    pub raw: bool,
 }
 
-/// Arguments of `audit export`.
-#[derive(Debug, Args)]
-pub struct AuditExport {
-    /// Name of the sandbox.
-    pub id: String,
-    /// File to write the trail to. Defaults to standard output.
-    #[arg(long, short = 'o')]
-    pub output: Option<PathBuf>,
+/// Which existing session `--resume` asks for.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Resume {
+    /// `--resume` with no value: offer the host's sessions and reopen the chosen one.
+    Pick,
+    /// `--resume <session>`: reopen that one.
+    Named(SessionId),
+}
+
+impl std::str::FromStr for Resume {
+    type Err = crate::session::NotASession;
+
+    /// Parses the flag's value, where the empty string is clap's way of saying the flag
+    /// was given without one.
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        if value.is_empty() {
+            Ok(Self::Pick)
+        } else {
+            value.parse().map(Self::Named)
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use clap::CommandFactory as _;
+
+    use super::*;
+
+    #[test]
+    fn the_command_line_is_one_clap_can_build() {
+        Cli::command().debug_assert();
+    }
+
+    fn resume_of(arguments: &[&str]) -> Option<Resume> {
+        let Command::Shell(shell) = Cli::try_parse_from(arguments).unwrap().command else {
+            panic!("`shell` parses as `shell`");
+        };
+        shell.attach.resume
+    }
+
+    #[test]
+    fn no_resume_flag_asks_for_a_new_session() {
+        assert_eq!(resume_of(&["cyber-sandbox", "shell"]), None);
+    }
+
+    #[test]
+    fn a_bare_resume_flag_asks_to_be_offered_a_choice() {
+        assert_eq!(
+            resume_of(&["cyber-sandbox", "shell", "--resume"]),
+            Some(Resume::Pick),
+            "there is no most-recent shorthand: which environment untrusted code runs in \
+             is never guessed"
+        );
+    }
+
+    #[test]
+    fn a_named_resume_flag_asks_for_that_session() {
+        assert_eq!(
+            resume_of(&["cyber-sandbox", "shell", "--resume", "c0ffee"]),
+            Some(Resume::Named("c0ffee".parse().unwrap()))
+        );
+    }
+
+    #[test]
+    fn a_session_that_was_never_issued_is_refused_before_anything_is_started() {
+        assert!(
+            Cli::try_parse_from(["cyber-sandbox", "audit", "../../etc/passwd"]).is_err(),
+            "the identifier becomes a container name and a file name"
+        );
+    }
 }

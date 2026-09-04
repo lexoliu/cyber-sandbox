@@ -1,24 +1,25 @@
 //! cyber-sandbox: isolated, fully audited security-research environments on macOS.
 //!
-//! Every sandbox is one lightweight virtual machine. The research agents keep their
-//! credentials on the host and reach it over SSH, so nothing inside the sandbox holds a
-//! token; every packet the sandbox sends is either audited by the in-guest gateway or
-//! refused by the packet filter.
+//! One command opens a session; everything underneath it — the runtime's services, the
+//! image, the virtual machine, its identity and its eventual reclamation — is this tool's
+//! business rather than the researcher's. Every packet a session sends is either audited
+//! by the in-guest gateway or refused by the packet filter.
 
 mod cli;
 mod command;
 mod host;
+mod image;
 mod keys;
-mod record;
+mod pick;
+mod provision;
+mod reclaim;
+mod session;
 
 use anyhow::Result;
 use clap::Parser as _;
 use tracing_subscriber::EnvFilter;
 
 use crate::{cli::Cli, host::Host};
-
-/// Exit status returned when `doctor` finds the host unable to run sandboxes.
-const NOT_READY: i32 = 1;
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -34,23 +35,7 @@ async fn main() -> Result<()> {
     let host = Host::discover()?;
 
     match &arguments.command {
-        cli::Command::Doctor(doctor) => {
-            if !command::doctor::run(&host, doctor).await? {
-                std::process::exit(NOT_READY);
-            }
-            Ok(())
-        }
-        cli::Command::Image { command } => match command {
-            cli::ImageCommand::Build(build) => command::image::build(&host, build).await,
-        },
-        cli::Command::Up(up) => command::lifecycle::up(&host, up).await,
         cli::Command::Shell(shell) => command::shell::run(&host, shell).await,
-        cli::Command::Down(target) => command::lifecycle::down(&host, target).await,
-        cli::Command::Ls => command::lifecycle::ls(&host).await,
-        cli::Command::Rm(target) => command::lifecycle::rm(&host, target).await,
-        cli::Command::Audit { command } => match command {
-            cli::AuditCommand::Tail(tail) => command::audit::tail(&host, tail).await,
-            cli::AuditCommand::Export(export) => command::audit::export(&host, export).await,
-        },
+        cli::Command::Audit(audit) => command::audit::follow(&host, audit).await,
     }
 }

@@ -1,22 +1,40 @@
-use std::os::unix::process::CommandExt as _;
+use std::{io::Write as _, os::unix::process::CommandExt as _};
 
 use anyhow::{Context as _, Result};
+use askama::Template;
 
-use crate::{cli, host::Host};
+use crate::{cli, host::Host, provision};
 
-/// Opens a shell, or runs a command, inside a running sandbox.
+/// What is printed before the session is handed over.
+#[derive(Debug, Template)]
+#[template(path = "session.txt", escape = "none")]
+struct Banner {
+    created: bool,
+    id: String,
+    image: String,
+    arch: String,
+    samples: String,
+    work_dir: String,
+}
+
+/// Opens a shell, or runs a command, inside an isolated research session.
 ///
 /// The `ssh` client replaces this process rather than being supervised by it, so the
 /// session gets a real controlling terminal, job control and signal handling, and the
-/// client's exit status becomes cyber-sandbox's own.
+/// client's exit status becomes cyber-sandbox's own. That is also why nothing is cleaned
+/// up afterwards: this process is gone by then, and the session's machine is reclaimed on
+/// the way in to the next one instead.
 ///
 /// # Errors
-/// Fails when no such sandbox is known, or when `ssh` cannot be executed at all. It
+/// Fails when the session cannot be opened, or when `ssh` cannot be executed at all. It
 /// never returns on success, because this process ceases to exist.
 pub async fn run(host: &Host, arguments: &cli::Shell) -> Result<()> {
-    let record = host.record(&arguments.id).await?;
-    let address = host.address_of(&Host::container_name(&record.id)?).await?;
-    let endpoint = record.endpoint(address, host.known_hosts_of(&record.id).await?);
+    let session = provision::open(host, &arguments.attach).await?;
+    let record = &session.record;
+    banner(host, &session)?;
+
+    let known_hosts = host.known_hosts_of(&record.id).await?;
+    let endpoint = record.endpoint(session.address, known_hosts);
 
     let mut client = std::process::Command::new("ssh");
     client.args(endpoint.ssh_arguments());
@@ -25,10 +43,42 @@ pub async fn run(host: &Host, arguments: &cli::Shell) -> Result<()> {
         &arguments.command,
     ));
 
-    Err(client.exec()).with_context(|| format!("opening a session in `{}`", record.id))
+    Err(client.exec()).with_context(|| format!("opening session {}", record.id))
 }
 
-/// What the sandbox is asked to run, starting in the sandbox's work directory.
+/// Tells the researcher what they are about to be dropped into.
+///
+/// Written to standard error, because the session's own output is what belongs on
+/// standard output — a `cyber-sandbox shell -- file sample.bin` piped into something else
+/// must not have this in front of it.
+fn banner(host: &Host, session: &provision::Session) -> Result<()> {
+    let record = &session.record;
+    let text = Banner {
+        created: session.created,
+        id: record.id.to_string(),
+        image: record.image.to_string(),
+        arch: record.arch.to_string(),
+        samples: record.samples.as_ref().map_or_else(
+            || "none mounted".to_owned(),
+            |path| {
+                format!(
+                    "{} \u{2192} {}",
+                    path.display(),
+                    host.layout().samples_dir.display()
+                )
+            },
+        ),
+        work_dir: record.work_dir.display().to_string(),
+    }
+    .render()
+    .context("rendering the session summary")?;
+    std::io::stderr()
+        .lock()
+        .write_all(text.as_bytes())
+        .context("writing the session summary")
+}
+
+/// What the session is asked to run, starting in the session's work directory.
 ///
 /// The `cd` is part of the remote command because sshd starts every session in the
 /// account's home, and a command runs where an interactive shell would land rather than
@@ -72,7 +122,7 @@ mod tests {
             remote_command("/work", &command),
             "cd '/work' && file sample.bin",
             "a command that lands in the home directory cannot see the samples the \
-             sandbox was started for"
+             session was started for"
         );
     }
 }
