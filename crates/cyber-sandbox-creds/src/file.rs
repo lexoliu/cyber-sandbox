@@ -118,7 +118,9 @@ impl Credentials {
 ///
 /// A sibling, because a rename is only atomic within one filesystem.
 fn staging_path(path: &Path) -> PathBuf {
-    let mut name = path.file_name().map_or_else(OsString::new, ToOwned::to_owned);
+    let mut name = path
+        .file_name()
+        .map_or_else(OsString::new, ToOwned::to_owned);
     name.push(".staging");
     path.with_file_name(name)
 }
@@ -150,7 +152,11 @@ mod tests {
 
         credentials().write_to(&path).await.unwrap();
 
-        let mode = tokio::fs::metadata(&path).await.unwrap().permissions().mode();
+        let mode = tokio::fs::metadata(&path)
+            .await
+            .unwrap()
+            .permissions()
+            .mode();
         assert_eq!(
             mode & 0o777,
             MODE,
@@ -189,9 +195,10 @@ mod tests {
         let first = tokio::fs::metadata(&path).await.unwrap();
 
         let mut rotated = credentials();
-        rotated
-            .env
-            .insert("CLAUDE_CODE_OAUTH_TOKEN".to_owned(), "sk-ant-oat01-next".to_owned());
+        rotated.env.insert(
+            "CLAUDE_CODE_OAUTH_TOKEN".to_owned(),
+            "sk-ant-oat01-next".to_owned(),
+        );
         rotated.write_to(&path).await.unwrap();
         let second = tokio::fs::metadata(&path).await.unwrap();
 
