@@ -106,6 +106,12 @@ preselected there so Codex opens on it without a menu, and the directory it work
 marked trusted in `~/.codex/config.toml` so opening it does not begin with a question
 about a directory cyber-sandbox made seconds earlier.
 
+Codex's hooks are switched off for the run, with a command-line override rather than a
+change to your settings. Hooks are the one part of Codex that executes on the host, and the
+ones a stock install carries belong to plugins that drive your browser; Codex remembers its
+trust in them per directory, so left on they would stop every session's first prompt with a
+review of hooks that have nothing to do with the session.
+
 That directory is `~/.cyber-sandbox/work/<id>`, and on the host it stays empty. Codex
 resolves the directory it works in against the host and then asks the session to execute
 there, so the path has to exist on both sides — inside the session the same path is a
