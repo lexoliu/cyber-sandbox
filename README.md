@@ -134,6 +134,23 @@ host does not have is one where Codex quietly runs the command on your laptop in
 | `cyber-sandbox-audit` | Audit record schema and JSONL reader/writer |
 | `cyber-sandbox-agents` | Reads the host's logins and registers a session with Codex |
 
+## Install
+
+```sh
+CYBER_SANDBOX_SIGNING_IDENTITY="Apple Development: You (TEAMID)" scripts/install.sh
+```
+
+The script builds the release binary, signs it with a certificate of yours, and installs it
+into `~/.local/bin`. `security find-identity -v -p codesigning` lists the certificates you
+have; an Apple Development certificate is enough.
+
+The signature is what stops macOS asking for your password. `cyber-sandbox claude` reads
+your Claude Code login from the Keychain, and the Keychain only lets an application do that
+silently once you have answered **Always Allow** for it — an answer it remembers by the
+application's signed identity. A binary straight out of `cargo build` carries only the
+linker's ad-hoc signature, a new identity on every build, so every rebuild asks again.
+Signed the same way each time, you answer once.
+
 ## Requirements
 
 macOS 26 on Apple silicon, and `brew install container`.
