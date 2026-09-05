@@ -2,6 +2,7 @@ use askama::Template;
 use cyber_sandbox_runtime::Arch;
 
 use crate::{
+    guest::GUEST_CRATES,
     layout::SandboxLayout,
     onboarding::{Configuration, Settings},
     openssh::OpenSshBuild,
@@ -44,6 +45,8 @@ pub struct Dockerfile {
     pub work_dir: String,
     /// npm packages providing the agents' in-sandbox tool side.
     pub agent_packages: String,
+    /// The workspace members compiled into the image, as `cargo build -p` arguments.
+    pub guest_crates: String,
     /// The OpenSSH release this image compiles its own sshd from, where the packaged one
     /// cannot serve the guest.
     pub openssh: Option<OpenSshBuild>,
@@ -177,6 +180,11 @@ impl RenderedImage {
             samples_dir: layout.samples_dir.display().to_string(),
             work_dir: layout.work_dir.display().to_string(),
             agent_packages: crate::profile::AGENT_PACKAGES.join(" "),
+            guest_crates: GUEST_CRATES
+                .iter()
+                .map(|name| format!("-p {name}"))
+                .collect::<Vec<_>>()
+                .join(" "),
             openssh: OpenSshBuild::required_for(arch),
         }
         .render()?;

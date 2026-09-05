@@ -3,7 +3,11 @@ use std::path::{Path, PathBuf};
 use cyber_sandbox_runtime::{Arch, ImageBuild, ImageReference, RuntimeError};
 
 use crate::{
-    digest::ContextDigest, layout::SandboxLayout, profile::ToolProfile, render::RenderedImage,
+    digest::ContextDigest,
+    guest::{self, GuestError},
+    layout::SandboxLayout,
+    profile::ToolProfile,
+    render::RenderedImage,
 };
 
 /// Files the builder needs from the workspace in order to compile the gateway.
@@ -27,6 +31,9 @@ pub enum StageError {
     /// The repository and digest did not form a reference the runtime accepts.
     #[error("the image tag is not a valid reference")]
     Tag(#[from] RuntimeError),
+    /// The workspace's dependency graph could not be followed.
+    #[error("failed to work out which sources the image is compiled from")]
+    Guest(#[from] GuestError),
     /// The staged context could not be read back to be digested.
     #[error("failed to digest the build context at {path}")]
     Digest {
@@ -48,26 +55,35 @@ pub struct BuildContext {
 }
 
 impl BuildContext {
-    /// Renders the image and copies the gateway sources into `directory`, then digests
-    /// the result.
+    /// Renders the image and copies the workspace sources into a directory under `parent`
+    /// named for their digest.
     ///
-    /// The staging directory is emptied first, so a stale Dockerfile from an earlier
-    /// layout can never be handed to the builder — nor counted in the digest.
+    /// The context is written to a directory of this process's own first and moved into
+    /// place once its name is known, so two invocations staging at once — or one staging
+    /// while a builder is still reading — never share a directory. A context that is
+    /// already in place is used as it is: its name says it holds the same bytes.
+    ///
+    /// The digest covers the rendered files, the workspace manifests and the sources the
+    /// guest programs are compiled from — not the sources of crates that are copied only
+    /// so that Cargo can load the workspace. A change to the host's own code is not a
+    /// change to the image.
     ///
     /// # Errors
     /// Fails when a template cannot be rendered, when the workspace sources cannot be
-    /// read, or when the staging directory cannot be written or read back.
+    /// read or followed, or when the staging directory cannot be written or read back.
     pub async fn stage(
-        directory: impl Into<PathBuf>,
+        parent: impl Into<PathBuf>,
         workspace_root: &Path,
         base_image: &str,
         arch: Arch,
         profile: ToolProfile,
         layout: &SandboxLayout,
     ) -> Result<Self, StageError> {
-        let directory = directory.into();
+        let parent = parent.into();
         let rendered = RenderedImage::render(base_image, arch, profile, layout)?;
+        let closure = guest::source_closure(workspace_root)?;
 
+        let directory = parent.join(format!("staging-{}", std::process::id()));
         remove_dir_all_if_present(&directory).await?;
         create_dir_all(&directory).await?;
 
@@ -92,17 +108,40 @@ impl BuildContext {
         // Read back from disk rather than summed up while writing, so that what is
         // digested is exactly what the builder will be handed.
         let digested = directory.clone();
-        let digest = tokio::task::spawn_blocking(move || ContextDigest::of_directory(&digested))
-            .await
-            .map_err(std::io::Error::other)
-            .and_then(|digest| digest)
-            .map_err(|source| StageError::Digest {
-                path: directory.clone(),
-                source,
-            })?;
+        let digest = tokio::task::spawn_blocking(move || {
+            ContextDigest::of_directory(&digested, |relative| {
+                guest::shapes_the_image(relative, &closure)
+            })
+        })
+        .await
+        .map_err(std::io::Error::other)
+        .and_then(|digest| digest)
+        .map_err(|source| StageError::Digest {
+            path: directory.clone(),
+            source,
+        })?;
+
+        let settled = parent.join(digest.tag());
+        match tokio::fs::rename(&directory, &settled).await {
+            Ok(()) => {}
+            // Another invocation got there first, with the same bytes under the same
+            // name; what this one staged is surplus.
+            Err(source)
+                if source.kind() == std::io::ErrorKind::AlreadyExists
+                    || source.kind() == std::io::ErrorKind::DirectoryNotEmpty =>
+            {
+                remove_dir_all_if_present(&directory).await?;
+            }
+            Err(source) => {
+                return Err(StageError::Io {
+                    path: settled,
+                    source,
+                });
+            }
+        }
 
         Ok(Self {
-            directory,
+            directory: settled,
             arch,
             digest,
         })

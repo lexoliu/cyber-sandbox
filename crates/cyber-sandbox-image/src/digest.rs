@@ -26,7 +26,8 @@ const TAG_DIGITS: usize = 12;
 pub struct ContextDigest([u8; 32]);
 
 impl ContextDigest {
-    /// Digests every file under `directory`.
+    /// Digests every file under `directory` for which `included` holds, given its path
+    /// relative to `directory`.
     ///
     /// Files are taken in the order of their paths, and each contributes its path, its
     /// length and its bytes, so that neither the order the filesystem lists them in nor a
@@ -36,9 +37,13 @@ impl ContextDigest {
     ///
     /// # Errors
     /// Fails when a file or directory under `directory` cannot be read.
-    pub fn of_directory(directory: &Path) -> std::io::Result<Self> {
+    pub fn of_directory(
+        directory: &Path,
+        included: impl Fn(&Path) -> bool,
+    ) -> std::io::Result<Self> {
         let mut files = Vec::new();
         collect(directory, directory, &mut files)?;
+        files.retain(|relative| included(relative));
         files.sort();
 
         let mut hasher = Sha256::new();
@@ -114,8 +119,8 @@ mod tests {
             ("Dockerfile", b"FROM kali"),
             ("crates/a/x.rs", b"fn a() {}"),
         ];
-        let first = ContextDigest::of_directory(staged(files).path()).unwrap();
-        let second = ContextDigest::of_directory(staged(files).path()).unwrap();
+        let first = ContextDigest::of_directory(staged(files).path(), |_| true).unwrap();
+        let second = ContextDigest::of_directory(staged(files).path(), |_| true).unwrap();
         assert_eq!(
             first, second,
             "the directory it is staged in is not part of what the build reads"
@@ -130,6 +135,7 @@ mod tests {
                 ("crates/a/x.rs", b"fn a() {}"),
             ])
             .path(),
+            |_| true,
         )
         .unwrap();
         let after = ContextDigest::of_directory(
@@ -138,6 +144,7 @@ mod tests {
                 ("crates/a/x.rs", b"fn b() {}"),
             ])
             .path(),
+            |_| true,
         )
         .unwrap();
         assert_ne!(before, after);
@@ -145,9 +152,12 @@ mod tests {
 
     #[test]
     fn a_byte_moving_between_files_changes_the_digest() {
-        let one = ContextDigest::of_directory(staged(&[("a", b"xy"), ("b", b"z")]).path()).unwrap();
+        let one =
+            ContextDigest::of_directory(staged(&[("a", b"xy"), ("b", b"z")]).path(), |_| true)
+                .unwrap();
         let other =
-            ContextDigest::of_directory(staged(&[("a", b"x"), ("b", b"yz")]).path()).unwrap();
+            ContextDigest::of_directory(staged(&[("a", b"x"), ("b", b"yz")]).path(), |_| true)
+                .unwrap();
         assert_ne!(
             one, other,
             "without lengths in the hash, the concatenation of the two contexts is the same"
@@ -156,14 +166,25 @@ mod tests {
 
     #[test]
     fn a_file_renamed_changes_the_digest() {
-        let one = ContextDigest::of_directory(staged(&[("a", b"x")]).path()).unwrap();
-        let other = ContextDigest::of_directory(staged(&[("b", b"x")]).path()).unwrap();
+        let one = ContextDigest::of_directory(staged(&[("a", b"x")]).path(), |_| true).unwrap();
+        let other = ContextDigest::of_directory(staged(&[("b", b"x")]).path(), |_| true).unwrap();
         assert_ne!(one, other, "the Dockerfile copies files by name");
     }
 
     #[test]
+    fn a_file_the_filter_leaves_out_changes_nothing() {
+        let without = ContextDigest::of_directory(staged(&[("a", b"x")]).path(), |_| true).unwrap();
+        let with = ContextDigest::of_directory(
+            staged(&[("a", b"x"), ("ignored/b", b"y")]).path(),
+            |relative| !relative.starts_with("ignored"),
+        )
+        .unwrap();
+        assert_eq!(without, with);
+    }
+
+    #[test]
     fn the_tag_is_a_fixed_prefix_of_the_hex_digest() {
-        let digest = ContextDigest::of_directory(staged(&[("a", b"x")]).path()).unwrap();
+        let digest = ContextDigest::of_directory(staged(&[("a", b"x")]).path(), |_| true).unwrap();
         let full = digest.to_string();
         assert_eq!(full.len(), 64);
         assert_eq!(digest.tag(), full[..TAG_DIGITS]);
