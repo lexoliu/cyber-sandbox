@@ -7,7 +7,7 @@ FROM rust:1-bookworm AS guest
 WORKDIR /src
 COPY Cargo.toml Cargo.lock ./
 COPY crates ./crates
-RUN cargo build --release --locked -p cyber-sandbox-gateway -p cyber-sandbox-courier \
+RUN cargo build --release --locked {{ guest_crates }} \
  && strip target/release/cyber-sandbox-gateway target/release/cyber-sandbox-courier
 
 {%- if let Some(openssh) = openssh %}

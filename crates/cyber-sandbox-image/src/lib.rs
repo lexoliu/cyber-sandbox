@@ -6,6 +6,7 @@
 //! in one place cannot silently disagree with another.
 
 mod digest;
+mod guest;
 mod layout;
 mod onboarding;
 mod openssh;
@@ -14,6 +15,7 @@ mod render;
 mod stage;
 
 pub use digest::ContextDigest;
+pub use guest::{GUEST_CRATES, GuestError};
 pub use layout::{Account, SandboxLayout};
 pub use openssh::OpenSshBuild;
 pub use profile::{ToolProfile, UnknownProfile};
