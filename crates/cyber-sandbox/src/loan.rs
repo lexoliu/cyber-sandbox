@@ -21,6 +21,8 @@ use std::{
 
 use anyhow::{Context as _, Result, bail};
 use cyber_sandbox_agents::ClaudeLogin;
+use cyber_sandbox_creds::Bearer;
+use jiff::{Timestamp, ToSpan as _};
 use tokio::net::{UnixListener, UnixStream};
 
 use crate::session::SessionId;
@@ -47,6 +49,13 @@ pub struct Attachment {
 
 /// How many hexadecimal digits distinguish two openings of one session.
 const NONCE_DIGITS: usize = 8;
+
+/// How long before its expiry a token already in hand stops being handed out again.
+///
+/// Three times the courier's renewal period, so that a session asking on schedule is
+/// never given a token with less than two renewals of life left, and the keychain is
+/// read again in time to pick up the login the researcher's own Claude Code has renewed.
+const REREAD_MARGIN_MINUTES: i64 = 15;
 
 impl Attachment {
     /// Names a new opening of `session`.
@@ -155,21 +164,25 @@ async fn prepare(socket: &Path) -> Result<()> {
     }
 }
 
-/// Answers every connection with a token read fresh from the keychain.
+/// Answers every connection with a token, read from the keychain when the one in hand is
+/// gone or about to go.
 ///
-/// Fresh rather than remembered, because the researcher's own Claude Code renews the
-/// stored login as it runs: a session that comes back for another token after hours of
-/// work gets whatever is valid now, and one that asks while the login happens to be
-/// expired is told so rather than handed something that will not work.
+/// Remembered rather than read every time, because a keychain read is a question the
+/// operating system may put to the researcher — and the session asks every few minutes.
+/// A token in hand is good until it expires whatever the researcher's own Claude Code
+/// renews meanwhile, so nothing is lost by keeping it; it is read again as expiry nears,
+/// which is when the renewed login is the one that matters. A token without a stated
+/// expiry is kept for the run.
 ///
 /// A connection that fails is logged and dropped. The session is untrusted, so a client
 /// that hangs up mid-sentence is an ordinary event, and it must not end the lending for
 /// the connection that comes after it.
 async fn serve(login: ClaudeLogin, listener: UnixListener) {
+    let mut in_hand = None;
     loop {
         match listener.accept().await {
             Ok((stream, _)) => {
-                if let Err(error) = lend(&login, stream).await {
+                if let Err(error) = lend(&login, &mut in_hand, stream).await {
                     tracing::warn!("could not lend the login to the session: {error:#}");
                 }
             }
@@ -181,20 +194,61 @@ async fn serve(login: ClaudeLogin, listener: UnixListener) {
     }
 }
 
-/// Reads the login and writes the part of it a session may have.
-async fn lend(login: &ClaudeLogin, stream: UnixStream) -> Result<()> {
-    let bearer = login.bearer().await.context("reading the login to lend")?;
+/// Writes the part of the login a session may have, reading the login first unless the
+/// token from last time is still good for a while.
+async fn lend(login: &ClaudeLogin, in_hand: &mut Option<Bearer>, stream: UnixStream) -> Result<()> {
+    let bearer = match in_hand
+        .take()
+        .filter(|bearer| is_still_good(bearer, Timestamp::now()))
+    {
+        Some(bearer) => bearer,
+        None => login.bearer().await.context("reading the login to lend")?,
+    };
     bearer
         .send(stream)
         .await
-        .context("handing the token to the session")
+        .context("handing the token to the session")?;
+    *in_hand = Some(bearer);
+    Ok(())
+}
+
+/// Whether `bearer` can be handed out at `now` without going back to the keychain.
+fn is_still_good(bearer: &Bearer, now: Timestamp) -> bool {
+    bearer
+        .expires_at
+        .is_none_or(|expiry| expiry > now + REREAD_MARGIN_MINUTES.minutes())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use cyber_sandbox_creds::Bearer;
     use tempfile::TempDir;
+
+    #[test]
+    fn a_token_in_hand_is_reused_until_its_expiry_comes_within_the_margin() {
+        let now = Timestamp::now();
+        let bearer = |minutes_left: i64| Bearer {
+            token: "sk-ant-oat01-x".to_owned(),
+            expires_at: Some(now + minutes_left.minutes()),
+        };
+        assert!(is_still_good(&bearer(60), now));
+        assert!(
+            !is_still_good(&bearer(REREAD_MARGIN_MINUTES), now),
+            "a session renewing on schedule must never be handed a token with less than \
+             two renewals of life left"
+        );
+        assert!(!is_still_good(&bearer(-1), now));
+        assert!(
+            is_still_good(
+                &Bearer {
+                    token: "sk-ant-oat01-x".to_owned(),
+                    expires_at: None,
+                },
+                now
+            ),
+            "an issuer that did not say when is not a reason to ask the researcher again"
+        );
+    }
 
     #[test]
     fn two_openings_of_one_session_do_not_land_on_each_others_files() {
