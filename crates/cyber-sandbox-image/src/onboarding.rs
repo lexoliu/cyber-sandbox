@@ -22,6 +22,13 @@ use crate::layout::SandboxLayout;
 /// everyone; it is the answer the first-run picker offers first, and `/theme` changes it.
 const THEME: &str = "dark";
 
+/// The model Claude Code opens on.
+///
+/// An alias rather than a dated identifier, so that the session follows the newest Opus
+/// the way the researcher's own installation would, and does not fall behind when one is
+/// retired.
+const MODEL: &str = "opus";
+
 /// `~/.claude.json`: the researcher account's Claude Code configuration.
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -42,6 +49,7 @@ struct Project {
 #[serde(rename_all = "camelCase")]
 pub struct Settings {
     theme: &'static str,
+    model: &'static str,
     skip_dangerous_mode_permission_prompt: bool,
 }
 
@@ -74,6 +82,7 @@ impl Settings {
     pub fn new() -> Self {
         Self {
             theme: THEME,
+            model: MODEL,
             skip_dangerous_mode_permission_prompt: true,
         }
     }
