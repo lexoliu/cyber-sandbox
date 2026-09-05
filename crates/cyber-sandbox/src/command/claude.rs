@@ -32,6 +32,7 @@ use tokio::{
 use crate::{
     cli,
     command::{banner, shell_quote},
+    handoff::Handoff,
     host::Host,
     loan::{Attachment, Loan},
     provision,
@@ -56,6 +57,9 @@ const AUTONOMOUS: &str = "--dangerously-skip-permissions";
 /// session, so the courier is the one that decides.
 const CARRY_ON: &str = "--continue-conversation";
 
+/// Claude Code's own way of being told something on top of its system prompt.
+const BRIEF: &str = "--append-system-prompt";
+
 /// Opens Claude Code on an isolated research session.
 ///
 /// # Errors
@@ -77,19 +81,21 @@ pub async fn run(host: &Host, arguments: &cli::Claude) -> Result<()> {
 
     let session = provision::open(host, &arguments.attach).await?;
     let record = &session.record;
-    banner(host, &session, "claude")?;
+    let handoff = Handoff::from_host(host.layout());
+    banner(host, &session, &handoff, "claude")?;
 
     let attachment = Attachment::random(record.id.clone())?;
     let loan = Loan::open(login, host.loan_socket(&attachment)).await?;
 
     let known_hosts = host.known_hosts_of(&record.id).await?;
-    let endpoint = record.endpoint(session.address, known_hosts);
+    let endpoint = record.endpoint(session.address, known_hosts, handoff.sent());
     let runtime_dir = &host.layout().runtime_dir;
     let errand = Errand {
         socket: runtime_dir.join(attachment.socket_name()),
         credentials: runtime_dir.join(attachment.credentials_name()),
         directory: record.work_dir.clone(),
         resumed: arguments.attach.resume.is_some(),
+        briefing: handoff.briefing(),
     };
 
     let status = supervise(&endpoint, &errand, loan.socket()).await;
@@ -115,6 +121,8 @@ struct Errand {
     directory: PathBuf,
     /// Whether this session is being reopened rather than created.
     resumed: bool,
+    /// What Claude Code is told about the researcher's keys it has been given, if any.
+    briefing: Option<String>,
 }
 
 /// Runs the session's Claude Code to completion, outliving the signals that end it.
@@ -199,6 +207,10 @@ impl Errand {
         }
         parts.push("--".to_owned());
         parts.push(AUTONOMOUS.to_owned());
+        if let Some(briefing) = &self.briefing {
+            parts.push(BRIEF.to_owned());
+            parts.push(shell_quote(briefing));
+        }
         parts.join(" ")
     }
 }
@@ -225,6 +237,7 @@ mod tests {
             identity_file: PathBuf::from("/state/keys/c0ffee"),
             known_hosts: PathBuf::from("/state/known_hosts/c0ffee"),
             start_directory: PathBuf::from("/work"),
+            send_environment: Vec::new(),
         }
     }
 
@@ -234,6 +247,7 @@ mod tests {
             credentials: PathBuf::from("/run/cyber-sandbox/c0ffee-1a2b3c4d.json"),
             directory: PathBuf::from("/work"),
             resumed,
+            briefing: None,
         }
     }
 
@@ -311,6 +325,22 @@ mod tests {
             remote.find(CARRY_ON) < remote.find(" -- "),
             "the courier is the one that decides, so this is its flag and not one passed \
              through to claude: {remote}"
+        );
+    }
+
+    #[test]
+    fn a_key_the_agent_was_given_is_explained_to_it_and_one_it_was_not_is_not_mentioned() {
+        assert!(!errand(false).remote_command().contains(BRIEF));
+        let mut briefed = errand(false);
+        briefed.briefing = Some("MALWAREBAZAAR_API_KEY holds the researcher's key.".to_owned());
+        let remote = briefed.remote_command();
+        assert!(
+            remote.ends_with(
+                "-- --dangerously-skip-permissions --append-system-prompt \
+                 'MALWAREBAZAAR_API_KEY holds the researcher'\\''s key.'"
+            ),
+            "the briefing is claude's argument, quoted for the shell that reads the \
+             remote command: {remote}"
         );
     }
 

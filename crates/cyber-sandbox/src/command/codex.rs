@@ -20,7 +20,7 @@ use tokio::{
     signal::unix::{SignalKind, signal},
 };
 
-use crate::{cli, command::banner, host::Host, provision, session::SessionId};
+use crate::{cli, command::banner, handoff::Handoff, host::Host, provision, session::SessionId};
 
 /// How Codex is asked to run: never stopping to ask, never sandboxing what it runs.
 ///
@@ -48,6 +48,10 @@ const AUTONOMOUS: &[&str] = &[
 /// An override rather than a setting, so the researcher's configuration is not touched.
 const NO_HOOKS: &[&str] = &["--config", "features.hooks=false"];
 
+/// The configuration key Codex reads the researcher's standing instructions from, which
+/// is where it is told about a key it has been given.
+const INSTRUCTIONS: &str = "developer_instructions";
+
 /// Opens Codex on an isolated research session.
 ///
 /// # Errors
@@ -57,14 +61,25 @@ const NO_HOOKS: &[&str] = &["--config", "features.hooks=false"];
 pub async fn run(host: &Host, arguments: &cli::Codex) -> Result<()> {
     let session = provision::open(host, &arguments.attach).await?;
     let record = &session.record;
-    banner(host, &session, "codex")?;
+    let handoff = Handoff::from_host(host.layout());
+    banner(host, &session, &handoff, "codex")?;
 
     let known_hosts = host.known_hosts_of(&record.id).await?;
-    let endpoint = record.endpoint(session.address, known_hosts);
+    let endpoint = record.endpoint(session.address, known_hosts, handoff.sent());
     let agents = host.agents();
     let codex = agents.codex();
 
     let work_alias = host.work_alias_of(&record.id).await?;
+    let instructions = match handoff.briefing() {
+        Some(briefing) => Some(
+            codex
+                .config()
+                .developer_instructions_with(&briefing)
+                .await
+                .context("reading codex's developer instructions")?,
+        ),
+        None => None,
+    };
 
     codex
         .register(&endpoint)
@@ -72,7 +87,7 @@ pub async fn run(host: &Host, arguments: &cli::Codex) -> Result<()> {
         .with_context(|| format!("adding session {} to codex's configuration", record.id))?;
     let previous = preselect(codex, &record.id).await?;
 
-    let status = supervise(&work_alias).await;
+    let status = supervise(&work_alias, instructions.as_deref()).await;
 
     // Before the run is reported, and whatever it did: an entry left behind is a dead
     // machine in the researcher's environment list, and a preselection left behind would
@@ -128,12 +143,12 @@ async fn restore(codex: &Codex, id: &SessionId, previous: Option<&str>) -> Resul
 /// interrupt this process's problem too: it reaches the whole foreground process group,
 /// so it is received and deliberately ignored here, leaving Codex to shut itself down
 /// while the parent survives long enough to clean up after it.
-async fn supervise(work_alias: &Path) -> Result<ExitStatus> {
+async fn supervise(work_alias: &Path, instructions: Option<&str>) -> Result<ExitStatus> {
     let mut interrupt = signal(SignalKind::interrupt()).context("listening for an interrupt")?;
     let mut terminate = signal(SignalKind::terminate()).context("listening for a termination")?;
     let mut hangup = signal(SignalKind::hangup()).context("listening for a hangup")?;
 
-    let mut codex = invocation(work_alias)
+    let mut codex = invocation(work_alias, instructions)
         .spawn()
         .context("starting codex on the host")?;
 
@@ -147,14 +162,20 @@ async fn supervise(work_alias: &Path) -> Result<ExitStatus> {
     }
 }
 
-/// How Codex is started for a session.
-fn invocation(work_alias: &Path) -> Command {
+/// How Codex is started for a session, with `instructions` — a TOML string literal — as
+/// its developer instructions when there is something to tell it.
+fn invocation(work_alias: &Path, instructions: Option<&str>) -> Command {
     let mut command = Command::new("codex");
     command
         .arg("--cd")
         .arg(work_alias)
         .args(AUTONOMOUS)
         .args(NO_HOOKS);
+    if let Some(instructions) = instructions {
+        command
+            .arg("--config")
+            .arg(format!("{INSTRUCTIONS}={instructions}"));
+    }
     command
 }
 
@@ -184,7 +205,10 @@ mod tests {
 
     #[test]
     fn codex_is_started_where_the_session_can_follow_it() {
-        let command = invocation(Path::new("/home/researcher/.cyber-sandbox/work/c0ffee"));
+        let command = invocation(
+            Path::new("/home/researcher/.cyber-sandbox/work/c0ffee"),
+            None,
+        );
         let arguments: Vec<_> = command.as_std().get_args().collect();
         assert!(
             arguments
@@ -197,8 +221,34 @@ mod tests {
     }
 
     #[test]
+    fn a_briefing_becomes_codexs_developer_instructions_and_no_briefing_becomes_nothing() {
+        let silent = invocation(Path::new("/work-alias"), None);
+        assert!(
+            !silent
+                .as_std()
+                .get_args()
+                .any(|argument| argument.to_string_lossy().starts_with(INSTRUCTIONS))
+        );
+        let briefed = invocation(Path::new("/work-alias"), Some("\"the key is set\""));
+        let arguments: Vec<_> = briefed
+            .as_std()
+            .get_args()
+            .map(|argument| argument.to_string_lossy().into_owned())
+            .collect();
+        assert!(
+            arguments
+                .windows(2)
+                .any(|pair| pair == ["--config", "developer_instructions=\"the key is set\""]),
+            "{arguments:?}"
+        );
+    }
+
+    #[test]
     fn nothing_codex_runs_on_the_host_is_left_to_a_dialog() {
-        let command = invocation(Path::new("/home/researcher/.cyber-sandbox/work/c0ffee"));
+        let command = invocation(
+            Path::new("/home/researcher/.cyber-sandbox/work/c0ffee"),
+            None,
+        );
         let arguments: Vec<_> = command.as_std().get_args().collect();
         assert!(
             arguments

@@ -3,6 +3,7 @@
   image      {{ image }} ({{ arch }})
   samples    {{ samples }}
   work       {{ work_dir }}
+  keys       {{ keys }}
 
 Every packet it sends is audited or refused. Follow them from another terminal:
 

@@ -29,8 +29,11 @@ AllowStreamLocalForwarding remote
 StreamLocalBindUnlink yes
 PermitTunnel no
 PrintMotd no
-# The locale and nothing else. An agent's credential reaches the sandbox over the
-# forwarded socket and is put into the environment of the one process that needs it, by
-# the courier; a variable accepted here would instead sit in sshd's child environment,
-# where anything in the sandbox that can read /proc could take it.
-AcceptEnv LANG LC_*
+# The locale, and the researcher's own MalwareBazaar key by name. An agent's borrowed
+# credential is not accepted here: it reaches the sandbox over the forwarded socket and
+# is put into the environment of the one process that needs it, by the courier. The
+# researcher's key is different in kind — it is theirs, it is wanted by every tool the
+# researcher account runs, and the account it lands in is not the one samples run as —
+# so it is accepted, and only it: an allow-list by name means nothing else the host
+# happens to have set can follow it in.
+AcceptEnv LANG LC_* {{ malwarebazaar_key }}

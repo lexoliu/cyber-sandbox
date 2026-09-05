@@ -5,6 +5,7 @@ use anyhow::{Context as _, Result};
 use crate::{
     cli,
     command::{banner, shell_quote},
+    handoff::Handoff,
     host::Host,
     provision,
 };
@@ -23,10 +24,11 @@ use crate::{
 pub async fn run(host: &Host, arguments: &cli::Shell) -> Result<()> {
     let session = provision::open(host, &arguments.attach).await?;
     let record = &session.record;
-    banner(host, &session, "shell")?;
+    let handoff = Handoff::from_host(host.layout());
+    banner(host, &session, &handoff, "shell")?;
 
     let known_hosts = host.known_hosts_of(&record.id).await?;
-    let endpoint = record.endpoint(session.address, known_hosts);
+    let endpoint = record.endpoint(session.address, known_hosts, handoff.sent());
 
     let mut client = std::process::Command::new("ssh");
     client.args(endpoint.ssh_arguments());

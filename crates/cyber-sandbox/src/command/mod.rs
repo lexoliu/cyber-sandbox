@@ -10,7 +10,7 @@ use std::io::Write as _;
 use anyhow::{Context as _, Result};
 use askama::Template;
 
-use crate::{host::Host, provision};
+use crate::{handoff::Handoff, host::Host, provision};
 
 /// What is printed before the session is handed over.
 #[derive(Debug, Template)]
@@ -23,6 +23,7 @@ struct Banner {
     arch: String,
     samples: String,
     work_dir: String,
+    keys: String,
 }
 
 /// Tells the researcher what they are about to be dropped into, where `command` is the
@@ -31,7 +32,12 @@ struct Banner {
 /// Written to standard error, because the session's own output is what belongs on
 /// standard output — a `cyber-sandbox shell -- file sample.bin` piped into something else
 /// must not have this in front of it.
-pub fn banner(host: &Host, session: &provision::Session, command: &'static str) -> Result<()> {
+pub fn banner(
+    host: &Host,
+    session: &provision::Session,
+    handoff: &Handoff,
+    command: &'static str,
+) -> Result<()> {
     let record = &session.record;
     let text = Banner {
         created: session.created,
@@ -50,6 +56,7 @@ pub fn banner(host: &Host, session: &provision::Session, command: &'static str) 
             },
         ),
         work_dir: record.work_dir.display().to_string(),
+        keys: handoff.summary(),
     }
     .render()
     .context("rendering the session summary")?;
