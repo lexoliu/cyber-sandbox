@@ -20,8 +20,10 @@ pub struct Account {
 /// is what keeps them from drifting apart.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SandboxLayout {
-    /// Account that runs sample code and the agents' tool side.
+    /// Account the researcher's own shell and the agents run as.
     pub researcher: Account,
+    /// Account sample code is detonated under, which owns nothing worth taking.
+    pub detonate: Account,
     /// Account that runs the audit gateway.
     pub gateway: Account,
     /// Loopback port the transparent TCP proxy listens on.
@@ -63,6 +65,14 @@ impl Default for SandboxLayout {
                 name: "gateway".to_owned(),
                 uid: 65001,
                 gid: 65001,
+            },
+            // A sample and the token an agent was lent are the two things in this machine
+            // that must not share a uid: the credential file is the researcher's at 0600,
+            // and everything a sample could read of it is on the other side of that.
+            detonate: Account {
+                name: "detonate".to_owned(),
+                uid: 65003,
+                gid: 65003,
             },
             proxy_port: 15000,
             dns_port: 15353,

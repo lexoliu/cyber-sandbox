@@ -65,19 +65,36 @@ RUN apt-get update \
  && apt-get clean \
  && rm -rf /var/lib/apt/lists/*
 
-# The gateway is the only process allowed to reach the network directly, and the
-# researcher account is the only one that ever runs sample code. Splitting them by uid
-# is what lets the packet filter tell audited traffic from traffic to be audited.
+# Three accounts, because the machine has three kinds of process in it and each pair of
+# them needs telling apart. The gateway is the only one allowed to reach the network
+# directly, which is how the packet filter tells audited traffic from traffic to be
+# audited. The researcher account is the researcher's own shell and both agents, and is
+# the account an agent's borrowed token is written for. Samples run as neither: they are
+# detonated under an account that owns nothing, so reading that token is not among the
+# things a sample can do by simply opening a file.
+#
+# The researcher's home is closed to the other two. Under it are the agent's settings and
+# every conversation it has had here, which is not material to leave a sample able to read.
+#
+# The working directory is shared, because a sample is detonated on the files the
+# researcher put there and the researcher wants what it leaves behind. It is setgid so
+# that whichever account wrote a file, the other can still reach it.
 RUN groupadd --gid {{ gateway_gid }} {{ gateway_user }} \
  && useradd --uid {{ gateway_uid }} --gid {{ gateway_gid }} --home-dir {{ gateway_home }} \
       --create-home --shell /usr/sbin/nologin {{ gateway_user }} \
  && groupadd --gid {{ researcher_gid }} {{ researcher_user }} \
  && useradd --uid {{ researcher_uid }} --gid {{ researcher_gid }} --home-dir /home/{{ researcher_user }} \
       --create-home --shell /bin/bash {{ researcher_user }} \
+ && groupadd --gid {{ detonate_gid }} {{ detonate_user }} \
+ && useradd --uid {{ detonate_uid }} --gid {{ detonate_gid }} --home-dir /home/{{ detonate_user }} \
+      --create-home --shell /bin/bash {{ detonate_user }} \
+ && usermod --append --groups {{ detonate_user }} {{ researcher_user }} \
  && mkdir -p {{ audit_directory }} /run/sshd {{ samples_dir }} {{ work_dir }} \
  && chown {{ gateway_uid }}:{{ gateway_gid }} {{ audit_directory }} \
- && chown {{ researcher_uid }}:{{ researcher_gid }} {{ work_dir }} \
- && chmod 0750 {{ audit_directory }}
+ && chown {{ researcher_uid }}:{{ detonate_gid }} {{ work_dir }} \
+ && chmod 0750 {{ audit_directory }} \
+ && chmod 0700 /home/{{ researcher_user }} \
+ && chmod 2770 {{ work_dir }}
 
 # Codex runs only its exec-server here, with the model side and the credential left on
 # the host. Claude Code runs here in full, on a token the courier lends it for as long as
@@ -94,6 +111,17 @@ RUN chown -R {{ researcher_uid }}:{{ researcher_gid }} /home/{{ researcher_user 
       /home/{{ researcher_user }}/.claude \
  && chmod 0600 /home/{{ researcher_user }}/.claude.json \
       /home/{{ researcher_user }}/.claude/settings.json
+
+# Becoming the detonation account is the one thing the researcher account may do that it
+# could not do on its own, and it is granted by a single sudoers rule that does not name
+# root. `visudo` checks the file here, so a rule that would not parse fails the build
+# rather than leaving a session where nothing can be detonated at all.
+COPY sudoers /etc/sudoers.d/cyber-sandbox
+COPY detonate.sh /usr/local/bin/detonate
+RUN chown root:root /etc/sudoers.d/cyber-sandbox \
+ && chmod 0440 /etc/sudoers.d/cyber-sandbox \
+ && chmod 0755 /usr/local/bin/detonate \
+ && visudo -cs -f /etc/sudoers.d/cyber-sandbox
 
 # The gateway needs CAP_NET_ADMIN to bind the netfilter log group, and it needs it after
 # the entrypoint has dropped to the gateway account. A file capability grants exactly

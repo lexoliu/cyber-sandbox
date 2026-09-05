@@ -22,6 +22,12 @@ pub struct Dockerfile {
     pub researcher_uid: u32,
     /// Researcher gid.
     pub researcher_gid: u32,
+    /// Detonation account name.
+    pub detonate_user: String,
+    /// Detonation uid.
+    pub detonate_uid: u32,
+    /// Detonation gid.
+    pub detonate_gid: u32,
     /// Gateway account name.
     pub gateway_user: String,
     /// Gateway uid.
@@ -41,6 +47,26 @@ pub struct Dockerfile {
     /// The OpenSSH release this image compiles its own sshd from, where the packaged one
     /// cannot serve the guest.
     pub openssh: Option<OpenSshBuild>,
+}
+
+/// The one rule letting the researcher account become the detonation account.
+#[derive(Debug, Template)]
+#[template(path = "sudoers", escape = "none")]
+pub struct Sudoers {
+    /// Researcher account name, the only account the rule is written for.
+    pub researcher_user: String,
+    /// Detonation account name, the only account the rule leads to.
+    pub detonate_user: String,
+}
+
+/// The wrapper a sample is started through.
+#[derive(Debug, Template)]
+#[template(path = "detonate.sh", escape = "none")]
+pub struct Detonate {
+    /// Researcher account name.
+    pub researcher_user: String,
+    /// Detonation account name.
+    pub detonate_user: String,
 }
 
 /// The packet filter policy applied before `CAP_NET_ADMIN` is dropped.
@@ -112,6 +138,10 @@ pub struct RenderedImage {
     pub claude_config: String,
     /// Contents of the researcher account's `~/.claude/settings.json`.
     pub claude_settings: String,
+    /// Contents of the sudoers drop-in.
+    pub sudoers: String,
+    /// Contents of the `detonate` wrapper.
+    pub detonate: String,
 }
 
 impl RenderedImage {
@@ -136,6 +166,9 @@ impl RenderedImage {
             researcher_user: layout.researcher.name.clone(),
             researcher_uid: layout.researcher.uid,
             researcher_gid: layout.researcher.gid,
+            detonate_user: layout.detonate.name.clone(),
+            detonate_uid: layout.detonate.uid,
+            detonate_gid: layout.detonate.gid,
             gateway_user: layout.gateway.name.clone(),
             gateway_uid: layout.gateway.uid,
             gateway_gid: layout.gateway.gid,
@@ -174,6 +207,16 @@ impl RenderedImage {
             researcher_user: layout.researcher.name.clone(),
         }
         .render()?;
+        let sudoers = Sudoers {
+            researcher_user: layout.researcher.name.clone(),
+            detonate_user: layout.detonate.name.clone(),
+        }
+        .render()?;
+        let detonate = Detonate {
+            researcher_user: layout.researcher.name.clone(),
+            detonate_user: layout.detonate.name.clone(),
+        }
+        .render()?;
         let claude_config = serde_json::to_string_pretty(&Configuration::for_layout(layout))
             .expect("the agent configuration is representable as JSON");
         let claude_settings = serde_json::to_string_pretty(&Settings::new())
@@ -185,6 +228,8 @@ impl RenderedImage {
             sshd_config,
             claude_config,
             claude_settings,
+            sudoers,
+            detonate,
         })
     }
 }
@@ -351,6 +396,64 @@ mod tests {
             "the file the agent's own settings live in is not one other accounts in the \
              session should be able to rewrite"
         );
+    }
+
+    #[test]
+    fn a_sample_and_a_borrowed_token_never_share_a_uid() {
+        let layout = SandboxLayout::default();
+        assert_ne!(layout.detonate.uid, layout.researcher.uid);
+        assert_ne!(layout.detonate.uid, layout.gateway.uid);
+        assert!(
+            (65000..=65533).contains(&layout.detonate.uid),
+            "outside the band Debian reserves, a base image could already hold this uid"
+        );
+    }
+
+    #[test]
+    fn the_only_account_a_sample_can_become_is_the_one_it_started_as() {
+        let rendered = rendered();
+        let rules: Vec<&str> = rendered
+            .sudoers
+            .lines()
+            .filter(|line| !line.trim_start().starts_with('#') && !line.trim().is_empty())
+            .collect();
+        assert_eq!(
+            rules,
+            vec!["researcher ALL=(detonate:detonate) NOPASSWD: ALL"],
+            "one rule, naming one account on each side: anything else is a way out of \
+             the uid a sample was started under"
+        );
+        assert!(
+            !rendered.sudoers.contains("(ALL"),
+            "a rule whose right-hand side is ALL includes root: {}",
+            rendered.sudoers
+        );
+    }
+
+    #[test]
+    fn a_sample_is_started_as_the_account_that_owns_nothing() {
+        let detonate = rendered().detonate;
+        assert!(detonate.contains("exec sudo --non-interactive --user detonate --"));
+        assert!(
+            !detonate.contains("--preserve-env"),
+            "sudo resets the environment, which is what keeps an agent's token out of \
+             the sample it starts: {detonate}"
+        );
+    }
+
+    #[test]
+    fn what_the_agent_holds_is_out_of_the_samples_reach() {
+        let dockerfile = rendered().dockerfile;
+        assert!(
+            dockerfile.contains("chmod 0700 /home/researcher"),
+            "the agent's settings and every conversation it has had here live under that \
+             directory"
+        );
+        assert!(
+            dockerfile.contains("visudo -cs -f /etc/sudoers.d/cyber-sandbox"),
+            "a rule that does not parse would leave the session unable to detonate at all"
+        );
+        assert!(dockerfile.contains("chmod 0440 /etc/sudoers.d/cyber-sandbox"));
     }
 
     #[test]

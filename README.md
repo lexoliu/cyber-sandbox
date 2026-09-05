@@ -13,8 +13,12 @@ gone a week untouched or the host runs short of disk.
 
 ## What it guarantees
 
-**No credential ever enters the sandbox.** Nothing inside a session holds a token, so a
-sample that reads every file it can reach still finds none.
+**A sample never reaches a credential.** Codex leaves its login on the host entirely.
+Claude Code runs inside the session and is lent an access token that expires in hours,
+written to a file only the researcher account can open and taken away the moment the agent
+exits; the refresh token behind it never crosses. Samples are detonated under a third
+account no credential is ever written for, so a sample that reads every file it can reach
+still finds none.
 
 **No packet leaves unaudited.** Traffic is redirected by uid to an in-guest gateway that
 terminates TLS with its own authority and records every DNS question, connection, TLS
@@ -37,6 +41,27 @@ cyber-sandbox claude --resume c0ffee      # or name it
 
 The first run builds the Kali image with the gateway compiled into it, from the checkout
 you run it in. Every run after that starts in seconds.
+
+## Detonating a sample
+
+Inside a session, run a sample through `detonate`:
+
+```sh
+detonate ./suspicious-binary
+detonate python3 unpack.py /samples/dropper.xls
+```
+
+The researcher account is the one the shell and both agents run as, and the one an agent's
+borrowed token is written for. `detonate` runs its argument as a separate account instead,
+which owns nothing, is not the owner of the credential file, and cannot read the directory
+the credential is written into. `sudo` resets the environment on the way through, so the
+token an agent holds does not travel into a sample the agent starts. The working directory
+is shared between the two accounts, because that is where the sample and what it leaves
+behind both belong.
+
+This is a second uid inside a machine that is itself the boundary. If an agent running
+unattended is talked into running a sample under its own account, the separation is gone
+and the loss is the token it was lent for those hours — the virtual machine still holds.
 
 `--arch amd64` runs an x86_64 root filesystem under Rosetta, for samples that are not
 arm64. It is settled when the session is created, so an `amd64` sample gets its own
