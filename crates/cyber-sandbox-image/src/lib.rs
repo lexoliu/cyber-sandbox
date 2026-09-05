@@ -5,6 +5,7 @@
 //! compiled templates fed from a single [`SandboxLayout`], so a port or uid that changes
 //! in one place cannot silently disagree with another.
 
+mod digest;
 mod layout;
 mod onboarding;
 mod openssh;
@@ -12,6 +13,7 @@ mod profile;
 mod render;
 mod stage;
 
+pub use digest::ContextDigest;
 pub use layout::{Account, SandboxLayout};
 pub use openssh::OpenSshBuild;
 pub use profile::{ToolProfile, UnknownProfile};

@@ -2,9 +2,9 @@
 //!
 //! Everything the old lifecycle commands did happens here instead, in the order a session
 //! needs it: start the runtime's services, reclaim what has gone stale, size the machine
-//! against the host, build the image if this architecture has never been asked for
-//! before, create or restart the machine, and wait until sshd answers on it. None of it
-//! is a step the researcher takes.
+//! against the host, build the image if none was built from these sources for this
+//! architecture, create or restart the machine, and wait until sshd answers on it. None
+//! of it is a step the researcher takes.
 
 use std::{
     net::{Ipv4Addr, SocketAddr},
@@ -114,12 +114,16 @@ async fn ensure_services(host: &Host) -> Result<()> {
 /// Creates a session, and the machine underneath it.
 async fn create(host: &Host, attach: &cli::Attach) -> Result<Session> {
     let arch = attach.arch.unwrap_or(Arch::HOST);
-    let image = cli::default_image(arch);
     let samples = canonical_samples(attach.samples.as_deref())?;
+
+    // The image is named before anything is reclaimed, because reclamation takes away
+    // every image no session refers to — and the one this session is about to start from
+    // is exactly that until the session exists.
+    let staged = image::stage(host, &attach.workspace, arch).await?;
 
     // Stale environments go before the host is measured, so that the measurement is of
     // the host this session will actually run on.
-    reclaim::make_room(host).await?;
+    reclaim::make_room(host, staged.tag()).await?;
 
     // Sizing is checked before anything is created, so a host that cannot carry another
     // session refuses without leaving an identity or a machine behind.
@@ -130,10 +134,8 @@ async fn create(host: &Host, attach: &cli::Attach) -> Result<Session> {
         "the host can carry another session"
     );
 
-    if !host.runtime().image_exists(&image).await? {
-        tracing::info!(image = %image, "building the sandbox image for the first time");
-        image::build(host, &attach.workspace, arch).await?;
-    }
+    image::ensure(host, &staged).await?;
+    let image = staged.tag().clone();
 
     let id = allocate(host).await?;
     let name = id.container_name()?;

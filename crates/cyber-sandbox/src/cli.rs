@@ -2,23 +2,12 @@ use std::path::PathBuf;
 
 use clap::{Args, Parser, Subcommand};
 use cyber_sandbox_image::ToolProfile;
-use cyber_sandbox_runtime::{Arch, ImageReference};
+use cyber_sandbox_runtime::Arch;
 
 use crate::session::SessionId;
 
 /// Repository the sandbox image is built into.
 pub const IMAGE_REPOSITORY: &str = "localhost/cyber-sandbox";
-
-/// Tag the sandbox image for `arch` is built under and started from.
-///
-/// The architecture is the tag rather than `latest`, because an `amd64` machine started
-/// from an `arm64` root filesystem is one that cannot execute its own userspace. A single
-/// mutable tag would make exactly that the outcome of having built both.
-#[must_use]
-pub fn default_image(arch: Arch) -> ImageReference {
-    ImageReference::new(format!("{IMAGE_REPOSITORY}:{arch}"))
-        .expect("a repository and an architecture always form a valid reference")
-}
 
 /// Kali image the sandbox derives from.
 pub const DEFAULT_BASE_IMAGE: &str = "docker.io/kalilinux/kali-rolling:latest";

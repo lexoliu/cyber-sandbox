@@ -16,14 +16,20 @@
 //! A machine the runtime is currently running is never touched by either rule. It may be
 //! holding a researcher's shell, and no amount of disk pressure justifies pulling a
 //! debugger out from under someone.
+//!
+//! Images go by a third rule, which is reference. An image is named for the sources it
+//! was built from, so every upgrade of the tool leaves the previous one behind; one that
+//! no session was created from and that the session being created will not use has
+//! nothing left to start, and at several gigabytes each they are the first thing to
+//! take away when the disk is short.
 
 use std::time::Duration;
 
 use anyhow::{Context as _, Result};
-use cyber_sandbox_runtime::{ContainerState, RunState, Sandbox, Workload};
+use cyber_sandbox_runtime::{ContainerState, ImageReference, RunState, Sandbox, Workload};
 use jiff::Timestamp;
 
-use crate::{host::Host, keys::SandboxKey, session::SessionRecord};
+use crate::{cli, host::Host, keys::SandboxKey, session::SessionRecord};
 
 /// How long a session may go unopened before it is reclaimed.
 ///
@@ -31,14 +37,14 @@ use crate::{host::Host, keys::SandboxKey, session::SessionRecord};
 /// investigation was left in, short enough that abandoned ones do not accumulate.
 pub const IDLE_LIMIT: Duration = Duration::from_secs(7 * 24 * 60 * 60);
 
-/// Makes room for a session that is about to be created.
+/// Makes room for a session that is about to be created from `image`.
 ///
 /// # Errors
-/// Fails when the host's state or the runtime's containers cannot be read, or when a
-/// machine that should go cannot be deleted. It does not fail for a host that is still
-/// short of disk afterwards: the budget refuses that, with a message about the host
-/// rather than about reclamation.
-pub async fn make_room(host: &Host) -> Result<()> {
+/// Fails when the host's state, the runtime's containers or its images cannot be read,
+/// or when a machine or image that should go cannot be deleted. It does not fail for a
+/// host that is still short of disk afterwards: the budget refuses that, with a message
+/// about the host rather than about reclamation.
+pub async fn make_room(host: &Host, image: &ImageReference) -> Result<()> {
     let live = host
         .runtime()
         .list()
@@ -65,6 +71,10 @@ pub async fn make_room(host: &Host) -> Result<()> {
         }
     }
 
+    // Images before sessions anyone might still want: an image nothing refers to costs
+    // nobody anything to lose, and is the size of several sessions.
+    prune_images(host, image).await?;
+
     for record in recent {
         if host.budget().await?.free_disk() >= <Sandbox as Workload>::DISK_FLOOR {
             return Ok(());
@@ -76,6 +86,42 @@ pub async fn make_room(host: &Host) -> Result<()> {
         remove(host, &record).await?;
     }
     Ok(())
+}
+
+/// Removes every sandbox image that no session was created from, other than `keep`.
+///
+/// Only images in this tool's own repository are considered: the base image, the
+/// builder's and anything the researcher pulled for themselves are not this tool's to
+/// take away.
+async fn prune_images(host: &Host, keep: &ImageReference) -> Result<()> {
+    let held = host
+        .runtime()
+        .image_list()
+        .await
+        .context("listing the runtime's images")?;
+    let sessions = host.sessions().await?;
+    for image in unreferenced(&held, &sessions, keep) {
+        tracing::info!(%image, "removing a sandbox image no session was created from");
+        host.runtime()
+            .image_remove(image)
+            .await
+            .with_context(|| format!("removing the image {image}"))?;
+    }
+    Ok(())
+}
+
+/// The sandbox images among `held` that neither `sessions` nor `keep` refer to.
+fn unreferenced<'a>(
+    held: &'a [ImageReference],
+    sessions: &[SessionRecord],
+    keep: &ImageReference,
+) -> Vec<&'a ImageReference> {
+    let prefix = format!("{}:", cli::IMAGE_REPOSITORY);
+    held.iter()
+        .filter(|image| image.as_str().starts_with(&prefix))
+        .filter(|image| *image != keep)
+        .filter(|image| !sessions.iter().any(|record| record.image == **image))
+        .collect()
 }
 
 /// Takes one session away completely: its machine, its identity, its host key and its
@@ -162,6 +208,31 @@ mod tests {
             created_at: last_used,
             last_used,
         }
+    }
+
+    fn image(reference: &str) -> ImageReference {
+        ImageReference::new(reference).unwrap()
+    }
+
+    #[test]
+    fn only_sandbox_images_nothing_refers_to_are_taken_away() {
+        let held = [
+            image("docker.io/kalilinux/kali-rolling:latest"),
+            image("ghcr.io/apple/container-builder-shim/builder:0.13.1"),
+            image("localhost/cyber-sandbox:arm64-0123456789ab"),
+            image("localhost/cyber-sandbox:arm64-fedcba987654"),
+            image("localhost/cyber-sandbox:amd64-0123456789ab"),
+        ];
+        let mut in_use = record("c0ffee", Timestamp::now());
+        in_use.image = image("localhost/cyber-sandbox:amd64-0123456789ab");
+        let keep = image("localhost/cyber-sandbox:arm64-fedcba987654");
+
+        assert_eq!(
+            unreferenced(&held, &[in_use], &keep),
+            vec![&image("localhost/cyber-sandbox:arm64-0123456789ab")],
+            "the base image and the builder are not this tool's; the image a session was \
+             created from and the one about to be used are still wanted"
+        );
     }
 
     #[test]
