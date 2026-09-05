@@ -35,6 +35,11 @@ impl SandboxEndpoint {
     ///
     /// Agent forwarding stays off: the sandbox is the untrusted side, and an agent socket
     /// reaching into it would undo the reason the credentials stay on the host.
+    ///
+    /// ssh is also told to say nothing below an error. SSH is how this tool reaches a
+    /// session, not something the researcher asked for, and its running commentary — the
+    /// host key it has just recorded, the connection it has just closed — names a
+    /// mechanism they were never shown. What goes wrong is still reported.
     #[must_use]
     pub fn ssh_arguments(&self) -> Vec<String> {
         vec![
@@ -44,6 +49,8 @@ impl SandboxEndpoint {
             self.identity_file.display().to_string(),
             "-o".to_owned(),
             "ForwardAgent=no".to_owned(),
+            "-o".to_owned(),
+            "LogLevel=ERROR".to_owned(),
             "-o".to_owned(),
             "StrictHostKeyChecking=accept-new".to_owned(),
             "-o".to_owned(),
@@ -76,6 +83,17 @@ mod tests {
             .windows(2)
             .filter(|pair| pair[0] == "-o")
             .find_map(|pair| pair[1].strip_prefix(name).map(ToOwned::to_owned))
+    }
+
+    #[test]
+    fn ssh_keeps_its_commentary_to_itself_but_still_reports_errors() {
+        let arguments = endpoint("c0ffee").ssh_arguments();
+        assert_eq!(
+            option_of(&arguments, "LogLevel=").as_deref(),
+            Some("ERROR"),
+            "a researcher who never asked for ssh should not read about the host key it \
+             recorded or the connection it closed, but must still hear what went wrong"
+        );
     }
 
     #[test]
