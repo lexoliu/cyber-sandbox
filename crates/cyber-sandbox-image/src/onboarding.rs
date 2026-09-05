@@ -29,6 +29,9 @@ const THEME: &str = "dark";
 /// retired.
 const MODEL: &str = "opus";
 
+/// Where the image installs the program Claude Code's status line runs.
+pub const STATUS_LINE_PROGRAM: &str = "/usr/local/bin/cyber-sandbox-statusline";
+
 /// `~/.claude.json`: the researcher account's Claude Code configuration.
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -51,6 +54,20 @@ pub struct Settings {
     theme: &'static str,
     model: &'static str,
     skip_dangerous_mode_permission_prompt: bool,
+    status_line: StatusLine,
+}
+
+/// `statusLine`: the command Claude Code runs to draw its status line.
+///
+/// A program of the image's rather than a shell string here, so that what the line says
+/// is a file with a comment explaining it, and changing it does not mean editing JSON.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct StatusLine {
+    #[serde(rename = "type")]
+    kind: &'static str,
+    command: &'static str,
+    padding: u8,
 }
 
 impl Configuration {
@@ -84,6 +101,11 @@ impl Settings {
             theme: THEME,
             model: MODEL,
             skip_dangerous_mode_permission_prompt: true,
+            status_line: StatusLine {
+                kind: "command",
+                command: STATUS_LINE_PROGRAM,
+                padding: 0,
+            },
         }
     }
 }

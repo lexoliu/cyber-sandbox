@@ -107,10 +107,12 @@ RUN npm install --global --no-fund --no-audit {{ agent_packages }}
 # in front of an agent that was started to work unattended.
 COPY claude.json /home/{{ researcher_user }}/.claude.json
 COPY claude-settings.json /home/{{ researcher_user }}/.claude/settings.json
+COPY statusline.sh {{ status_line_program }}
 RUN chown -R {{ researcher_uid }}:{{ researcher_gid }} /home/{{ researcher_user }}/.claude.json \
       /home/{{ researcher_user }}/.claude \
  && chmod 0600 /home/{{ researcher_user }}/.claude.json \
-      /home/{{ researcher_user }}/.claude/settings.json
+      /home/{{ researcher_user }}/.claude/settings.json \
+ && chmod 0755 {{ status_line_program }}
 
 # Becoming the detonation account is the one thing the researcher account may do that it
 # could not do on its own, and it is granted by a single sudoers rule that does not name
