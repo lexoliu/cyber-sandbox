@@ -179,6 +179,7 @@ mod tests {
             identity_file: PathBuf::from("/keys/id_ed25519"),
             known_hosts: PathBuf::from("/keys/known_hosts"),
             start_directory: PathBuf::from("/work"),
+            send_environment: Vec::new(),
         }
     }
 

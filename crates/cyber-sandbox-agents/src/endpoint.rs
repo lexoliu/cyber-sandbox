@@ -22,6 +22,12 @@ pub struct SandboxEndpoint {
     pub known_hosts: PathBuf,
     /// Directory the agents start in inside the sandbox.
     pub start_directory: PathBuf,
+    /// Variables of the host's environment ssh is asked to send along.
+    ///
+    /// Sent rather than set: `SendEnv` takes the value from the client's own environment,
+    /// so it never appears on a command line, and sends nothing for a name that is not
+    /// set. The sandbox's sshd accepts the same names and no others.
+    pub send_environment: Vec<String>,
 }
 
 impl SandboxEndpoint {
@@ -42,7 +48,7 @@ impl SandboxEndpoint {
     /// mechanism they were never shown. What goes wrong is still reported.
     #[must_use]
     pub fn ssh_arguments(&self) -> Vec<String> {
-        vec![
+        let mut arguments = vec![
             "-p".to_owned(),
             self.port.to_string(),
             "-i".to_owned(),
@@ -55,8 +61,13 @@ impl SandboxEndpoint {
             "StrictHostKeyChecking=accept-new".to_owned(),
             "-o".to_owned(),
             format!("UserKnownHostsFile={}", self.known_hosts.display()),
-            self.destination(),
-        ]
+        ];
+        for name in &self.send_environment {
+            arguments.push("-o".to_owned());
+            arguments.push(format!("SendEnv={name}"));
+        }
+        arguments.push(self.destination());
+        arguments
     }
 }
 
@@ -75,6 +86,7 @@ mod tests {
             identity_file: PathBuf::from("/state/keys").join(id),
             known_hosts: PathBuf::from("/state/known_hosts").join(id),
             start_directory: PathBuf::from("/work"),
+            send_environment: vec!["MALWAREBAZAAR_API_KEY".to_owned()],
         }
     }
 
@@ -83,6 +95,22 @@ mod tests {
             .windows(2)
             .filter(|pair| pair[0] == "-o")
             .find_map(|pair| pair[1].strip_prefix(name).map(ToOwned::to_owned))
+    }
+
+    #[test]
+    fn the_researchers_key_is_sent_by_name_and_never_by_value() {
+        let arguments = endpoint("c0ffee").ssh_arguments();
+        assert_eq!(
+            option_of(&arguments, "SendEnv=").as_deref(),
+            Some("MALWAREBAZAAR_API_KEY"),
+            "the value comes from the client's environment, not from a command line \
+             anyone on the host can list"
+        );
+        assert_eq!(
+            arguments.last().map(String::as_str),
+            Some("researcher@192.168.65.40"),
+            "everything of ours goes before the destination"
+        );
     }
 
     #[test]

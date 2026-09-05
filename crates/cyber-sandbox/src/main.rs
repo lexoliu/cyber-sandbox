@@ -7,6 +7,7 @@
 
 mod cli;
 mod command;
+mod handoff;
 mod host;
 mod image;
 mod keys;

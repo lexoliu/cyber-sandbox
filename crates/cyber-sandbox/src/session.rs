@@ -159,9 +159,16 @@ impl SessionRecord {
     /// the runtime is what stops a stale address from being dialled.
     ///
     /// `known_hosts` is passed for the same reason the address is: it is derived from the
-    /// host's state directory, which the record does not know about.
+    /// host's state directory, which the record does not know about. `send_environment`
+    /// is what the host has of the researcher's own keys right now, which no record can
+    /// know either.
     #[must_use]
-    pub fn endpoint(&self, address: Ipv4Addr, known_hosts: PathBuf) -> SandboxEndpoint {
+    pub fn endpoint(
+        &self,
+        address: Ipv4Addr,
+        known_hosts: PathBuf,
+        send_environment: Vec<String>,
+    ) -> SandboxEndpoint {
         SandboxEndpoint {
             id: self.id.to_string(),
             user: self.researcher.clone(),
@@ -170,6 +177,7 @@ impl SessionRecord {
             identity_file: self.identity_file.clone(),
             known_hosts,
             start_directory: self.work_dir.clone(),
+            send_environment,
         }
     }
 }

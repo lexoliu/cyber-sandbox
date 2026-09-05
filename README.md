@@ -66,6 +66,20 @@ This is a second uid inside a machine that is itself the boundary. If an agent r
 unattended is talked into running a sample under its own account, the separation is gone
 and the loss is the token it was lent for those hours — the virtual machine still holds.
 
+## Your own keys
+
+A MalwareBazaar key on the host is handed to the session. Export it as
+`MALWAREBAZAAR_API_KEY` and every session you open afterwards has the same variable in the
+researcher account's environment; leave it unset and nothing is passed. There is no flag
+and no setting, because the variable is the switch. The summary printed when a session
+opens says which it was.
+
+The value travels in ssh's own environment forwarding, by name, so it never appears on a
+command line, and the session's sshd accepts that one name and no other. Samples never see
+it: they run as a separate account, and `sudo` resets the environment on the way there.
+Claude Code and Codex are told the key exists and what it is for when they start, so you
+do not have to.
+
 `--arch amd64` runs an x86_64 root filesystem under Rosetta, for samples that are not
 arm64. It is settled when the session is created, so an `amd64` sample gets its own
 session rather than a flag on an existing one.

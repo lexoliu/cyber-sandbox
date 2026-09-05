@@ -24,6 +24,9 @@ const PROJECTS: &str = "projects";
 const TRUST_LEVEL: &str = "trust_level";
 const TRUSTED: &str = "trusted";
 
+/// Key holding what the researcher has told Codex on top of its own instructions.
+const DEVELOPER_INSTRUCTIONS: &str = "developer_instructions";
+
 /// Codex's configuration file, edited in place.
 #[derive(Debug, Clone)]
 pub struct CodexConfig {
@@ -43,6 +46,32 @@ impl CodexConfig {
     #[must_use]
     pub fn path(&self) -> &Path {
         self.file.path()
+    }
+
+    /// The `developer_instructions` override for a run that needs `addition` said as well.
+    ///
+    /// An override replaces what the file holds rather than adding to it, so the
+    /// researcher's own instructions, when they have any, are carried into the override
+    /// ahead of the addition. The result is a TOML string literal, which is what
+    /// `codex --config key=value` parses its value as.
+    ///
+    /// # Errors
+    /// Fails when the file cannot be read or is not valid TOML, or when it holds
+    /// `developer_instructions` as something other than a string.
+    pub async fn developer_instructions_with(&self, addition: &str) -> Result<String, AgentError> {
+        let document = self.file.read().await?;
+        let own = match document.get(DEVELOPER_INSTRUCTIONS) {
+            None => None,
+            Some(item) => Some(item.as_str().ok_or_else(|| AgentError::UnexpectedShape {
+                path: self.path().to_path_buf(),
+                key: DEVELOPER_INSTRUCTIONS,
+            })?),
+        };
+        let merged = match own {
+            Some(own) => format!("{own}\n\n{addition}"),
+            None => addition.to_owned(),
+        };
+        Ok(toml_edit::Value::from(merged).to_string())
     }
 
     /// Records that `directory` is trusted, so Codex opens in it without asking.
@@ -108,6 +137,42 @@ mod tests {
 
     async fn stored(path: &Path) -> String {
         tokio::fs::read_to_string(path).await.unwrap()
+    }
+
+    #[tokio::test]
+    async fn a_briefing_is_added_to_the_researchers_own_instructions_not_put_in_their_place() {
+        let directory = TempDir::new().unwrap();
+        let path = directory.path().join("config.toml");
+        tokio::fs::write(&path, "developer_instructions = \"Answer in French.\"\n")
+            .await
+            .unwrap();
+        let config = CodexConfig::new(path.clone());
+
+        let literal = config
+            .developer_instructions_with("The key is set.")
+            .await
+            .unwrap();
+        let parsed: toml_edit::Value = literal.parse().unwrap();
+        assert_eq!(
+            parsed.as_str(),
+            Some("Answer in French.\n\nThe key is set."),
+            "an override replaces the file's value, so theirs has to ride along in it, \
+             and the result must be one TOML string for `-c key=value` to read: {literal}"
+        );
+        assert_eq!(
+            stored(&path).await,
+            "developer_instructions = \"Answer in French.\"\n",
+            "the file itself is not touched"
+        );
+
+        tokio::fs::write(&path, "").await.unwrap();
+        assert_eq!(
+            config
+                .developer_instructions_with("The key is set.")
+                .await
+                .unwrap(),
+            "\"The key is set.\""
+        );
     }
 
     #[tokio::test]

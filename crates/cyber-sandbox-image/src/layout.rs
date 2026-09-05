@@ -46,6 +46,9 @@ pub struct SandboxLayout {
     pub work_dir: PathBuf,
     /// Directory the host's per-attachment sockets and credential files live in.
     pub runtime_dir: PathBuf,
+    /// Host variable holding the researcher's `Auth-Key` for `MalwareBazaar`, handed to the
+    /// researcher account's environment in the session whenever the host has it set.
+    pub malwarebazaar_key: String,
 }
 
 impl Default for SandboxLayout {
@@ -87,6 +90,9 @@ impl Default for SandboxLayout {
             // written for one process and read by it, and the courier takes the
             // credential it wrote back off the disk when the agent it served exits.
             runtime_dir: PathBuf::from("/run/cyber-sandbox"),
+            // The name OpenCTI's connector reads, and the product's own; there is no
+            // convention beyond that, and one abuse.ch key serves all of their services.
+            malwarebazaar_key: "MALWAREBAZAAR_API_KEY".to_owned(),
         }
     }
 }

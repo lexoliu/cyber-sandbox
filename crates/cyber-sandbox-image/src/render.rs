@@ -124,6 +124,8 @@ pub struct SshdConfig {
     pub authorized_keys: String,
     /// Researcher account name.
     pub researcher_user: String,
+    /// The one variable of the researcher's own that sshd accepts from the host.
+    pub malwarebazaar_key: String,
 }
 
 /// Every generated file that makes up the image build context.
@@ -213,6 +215,7 @@ impl RenderedImage {
             ssh_port: layout.ssh_port,
             authorized_keys: layout.authorized_keys.display().to_string(),
             researcher_user: layout.researcher.name.clone(),
+            malwarebazaar_key: layout.malwarebazaar_key.clone(),
         }
         .render()?;
         let sudoers = Sudoers {
@@ -520,17 +523,17 @@ mod tests {
     }
 
     #[test]
-    fn no_credential_bearing_variable_survives_the_ssh_connection() {
+    fn the_only_variables_accepted_over_ssh_are_the_locale_and_the_researchers_own_key() {
         let config = rendered().sshd_config;
         let accepted = config
             .lines()
             .find(|line| line.starts_with("AcceptEnv"))
             .unwrap();
         assert_eq!(
-            accepted, "AcceptEnv LANG LC_*",
-            "a token accepted here would sit in sshd's child environment, readable \
-             through /proc by anything else in the sandbox; the courier puts it in one \
-             process's environment instead"
+            accepted, "AcceptEnv LANG LC_* MALWAREBAZAAR_API_KEY",
+            "an agent's borrowed token is not accepted here — the courier puts it in one \
+             process's environment — and the researcher's own key is accepted by name, so \
+             nothing else the host has set can follow it in"
         );
     }
 
