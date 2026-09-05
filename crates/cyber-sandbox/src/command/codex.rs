@@ -37,6 +37,17 @@ const AUTONOMOUS: &[&str] = &[
     "danger-full-access",
 ];
 
+/// Codex's hooks, switched off for the length of the run.
+///
+/// Hooks are the one part of Codex that runs on the host rather than in the session — its
+/// own dialog says so — and the ones a stock install carries belong to plugins that drive
+/// the host's browser. Codex keeps its trust in them per directory, and a session's
+/// directory is minutes old, so it would stop the first prompt of every session to ask
+/// about them. This answers the question the way the dialog's own third option does:
+/// nothing runs on the host, and nothing about the researcher's trust is written down.
+/// An override rather than a setting, so the researcher's configuration is not touched.
+const NO_HOOKS: &[&str] = &["--config", "features.hooks=false"];
+
 /// Opens Codex on an isolated research session.
 ///
 /// # Errors
@@ -139,7 +150,11 @@ async fn supervise(work_alias: &Path) -> Result<ExitStatus> {
 /// How Codex is started for a session.
 fn invocation(work_alias: &Path) -> Command {
     let mut command = Command::new("codex");
-    command.arg("--cd").arg(work_alias).args(AUTONOMOUS);
+    command
+        .arg("--cd")
+        .arg(work_alias)
+        .args(AUTONOMOUS)
+        .args(NO_HOOKS);
     command
 }
 
@@ -178,6 +193,20 @@ mod tests {
             "codex resolves its working directory on the host, so one it is not given \
              explicitly is the researcher's own — a path the session does not have, which \
              codex answers by running the command on the host instead: {arguments:?}"
+        );
+    }
+
+    #[test]
+    fn nothing_codex_runs_on_the_host_is_left_to_a_dialog() {
+        let command = invocation(Path::new("/home/researcher/.cyber-sandbox/work/c0ffee"));
+        let arguments: Vec<_> = command.as_std().get_args().collect();
+        assert!(
+            arguments
+                .windows(2)
+                .any(|pair| pair == ["--config", "features.hooks=false"]),
+            "hooks run on the host, and a session's directory is one codex has never seen, \
+             so left on it would stop every session's first prompt to ask about them: \
+             {arguments:?}"
         );
     }
 
