@@ -378,6 +378,11 @@ mod tests {
 
         let settings: serde_json::Value = serde_json::from_str(&rendered.claude_settings).unwrap();
         assert_eq!(settings["skipDangerousModePermissionPrompt"], true);
+        assert_eq!(
+            settings["model"], "opus",
+            "the session opens on the strongest model rather than on whatever the \
+             installation defaults to that week"
+        );
         assert!(
             settings["theme"].is_string(),
             "an unanswered theme is a picker the session opens on instead of the work"
