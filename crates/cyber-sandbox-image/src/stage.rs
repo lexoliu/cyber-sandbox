@@ -104,6 +104,7 @@ impl BuildContext {
         .await?;
         write_file(&directory.join("sudoers"), &rendered.sudoers).await?;
         write_file(&directory.join("detonate.sh"), &rendered.detonate).await?;
+        write_file(&directory.join("statusline.sh"), rendered.statusline).await?;
 
         // Read back from disk rather than summed up while writing, so that what is
         // digested is exactly what the builder will be handed.

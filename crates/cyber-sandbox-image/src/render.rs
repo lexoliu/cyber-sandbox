@@ -47,6 +47,8 @@ pub struct Dockerfile {
     pub agent_packages: String,
     /// The workspace members compiled into the image, as `cargo build -p` arguments.
     pub guest_crates: String,
+    /// Where the program Claude Code's status line runs is installed.
+    pub status_line_program: &'static str,
     /// The OpenSSH release this image compiles its own sshd from, where the packaged one
     /// cannot serve the guest.
     pub openssh: Option<OpenSshBuild>,
@@ -145,6 +147,8 @@ pub struct RenderedImage {
     pub claude_settings: String,
     /// Contents of the sudoers drop-in.
     pub sudoers: String,
+    /// Contents of the program Claude Code's status line runs.
+    pub statusline: &'static str,
     /// Contents of the `detonate` wrapper.
     pub detonate: String,
 }
@@ -187,6 +191,7 @@ impl RenderedImage {
                 .map(|name| format!("-p {name}"))
                 .collect::<Vec<_>>()
                 .join(" "),
+            status_line_program: crate::onboarding::STATUS_LINE_PROGRAM,
             openssh: OpenSshBuild::required_for(arch),
         }
         .render()?;
@@ -241,6 +246,7 @@ impl RenderedImage {
             claude_settings,
             sudoers,
             detonate,
+            statusline: include_str!("../templates/statusline.sh"),
         })
     }
 }
@@ -393,6 +399,22 @@ mod tests {
             settings["model"], "opus",
             "the session opens on the strongest model rather than on whatever the \
              installation defaults to that week"
+        );
+        assert_eq!(settings["statusLine"]["type"], "command");
+        assert_eq!(
+            settings["statusLine"]["command"],
+            crate::onboarding::STATUS_LINE_PROGRAM,
+            "the status line is drawn by a program the image installs, so the two have to \
+             agree on where"
+        );
+        assert!(rendered.statusline.contains("printf 'Cyber sandbox"));
+        assert!(
+            rendered.dockerfile.contains(&format!(
+                "COPY statusline.sh {}",
+                crate::onboarding::STATUS_LINE_PROGRAM
+            )),
+            "{}",
+            rendered.dockerfile
         );
         assert!(
             settings["theme"].is_string(),
