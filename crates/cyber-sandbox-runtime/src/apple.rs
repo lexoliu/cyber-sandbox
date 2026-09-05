@@ -4,6 +4,7 @@ use std::{
     process::Stdio,
 };
 
+use serde::Deserialize;
 use tokio::{
     io::{AsyncBufReadExt as _, BufReader, Lines},
     process::{Child, ChildStdout, Command},
@@ -99,6 +100,18 @@ pub struct ImageBuild {
     pub arch: Arch,
     /// Build arguments passed through to the builder.
     pub build_args: Vec<(String, String)>,
+}
+
+/// One entry of `container image list --format json`.
+#[derive(Debug, Deserialize)]
+struct ImageListing {
+    configuration: ImageListingConfiguration,
+}
+
+/// The part of an image's configuration that names it.
+#[derive(Debug, Deserialize)]
+struct ImageListingConfiguration {
+    name: ImageReference,
 }
 
 impl AppleContainer {
@@ -344,6 +357,39 @@ impl AppleContainer {
             Err(RuntimeError::Command { .. }) => Ok(false),
             Err(other) => Err(other),
         }
+    }
+
+    /// Every image the runtime holds, by the reference it was built or pulled under.
+    ///
+    /// # Errors
+    /// Fails when the runtime cannot be invoked, when its output cannot be parsed, or when
+    /// it reports an image under a name that is not a reference.
+    pub async fn image_list(&self) -> Result<Vec<ImageReference>, RuntimeError> {
+        let args = ["image", "list", "--format", "json"];
+        let stdout = self.output(&args).await?;
+        let images: Vec<ImageListing> =
+            serde_json::from_str(&stdout).map_err(|source| RuntimeError::Output {
+                args: to_owned(&args),
+                source,
+            })?;
+        Ok(images
+            .into_iter()
+            .map(|image| image.configuration.name)
+            .collect())
+    }
+
+    /// Deletes an image the runtime holds.
+    ///
+    /// # Errors
+    /// Fails when the runtime does not hold the image, or refuses to delete it — as it
+    /// does while a container created from it still exists.
+    pub async fn image_remove(&self, reference: &ImageReference) -> Result<(), RuntimeError> {
+        let args = [
+            "image".to_owned(),
+            "delete".to_owned(),
+            reference.to_string(),
+        ];
+        self.output(&args).await.map(drop)
     }
 
     /// Starts a container that already exists.

@@ -2,7 +2,9 @@ use std::path::{Path, PathBuf};
 
 use cyber_sandbox_runtime::{Arch, ImageBuild, ImageReference, RuntimeError};
 
-use crate::{layout::SandboxLayout, profile::ToolProfile, render::RenderedImage};
+use crate::{
+    digest::ContextDigest, layout::SandboxLayout, profile::ToolProfile, render::RenderedImage,
+};
 
 /// Files the builder needs from the workspace in order to compile the gateway.
 const WORKSPACE_FILES: &[&str] = &["Cargo.toml", "Cargo.lock", "rust-toolchain.toml"];
@@ -22,32 +24,42 @@ pub enum StageError {
         #[source]
         source: std::io::Error,
     },
-    /// The image reference the caller asked for is not valid.
+    /// The repository and digest did not form a reference the runtime accepts.
     #[error("the image tag is not a valid reference")]
     Tag(#[from] RuntimeError),
+    /// The staged context could not be read back to be digested.
+    #[error("failed to digest the build context at {path}")]
+    Digest {
+        /// Directory being digested.
+        path: PathBuf,
+        /// Underlying OS error.
+        #[source]
+        source: std::io::Error,
+    },
 }
 
-/// A staged directory holding everything `container build` needs.
+/// A staged directory holding everything `container build` needs, and the digest that
+/// names what it holds.
 #[derive(Debug)]
 pub struct BuildContext {
     directory: PathBuf,
-    tag: ImageReference,
     arch: Arch,
+    digest: ContextDigest,
 }
 
 impl BuildContext {
-    /// Renders the image and copies the gateway sources into `directory`.
+    /// Renders the image and copies the gateway sources into `directory`, then digests
+    /// the result.
     ///
     /// The staging directory is emptied first, so a stale Dockerfile from an earlier
-    /// layout can never be handed to the builder.
+    /// layout can never be handed to the builder — nor counted in the digest.
     ///
     /// # Errors
     /// Fails when a template cannot be rendered, when the workspace sources cannot be
-    /// read, or when the staging directory cannot be written.
+    /// read, or when the staging directory cannot be written or read back.
     pub async fn stage(
         directory: impl Into<PathBuf>,
         workspace_root: &Path,
-        tag: ImageReference,
         base_image: &str,
         arch: Arch,
         profile: ToolProfile,
@@ -77,10 +89,22 @@ impl BuildContext {
         write_file(&directory.join("sudoers"), &rendered.sudoers).await?;
         write_file(&directory.join("detonate.sh"), &rendered.detonate).await?;
 
+        // Read back from disk rather than summed up while writing, so that what is
+        // digested is exactly what the builder will be handed.
+        let digested = directory.clone();
+        let digest = tokio::task::spawn_blocking(move || ContextDigest::of_directory(&digested))
+            .await
+            .map_err(std::io::Error::other)
+            .and_then(|digest| digest)
+            .map_err(|source| StageError::Digest {
+                path: directory.clone(),
+                source,
+            })?;
+
         Ok(Self {
             directory,
-            tag,
             arch,
+            digest,
         })
     }
 
@@ -90,11 +114,34 @@ impl BuildContext {
         &self.directory
     }
 
-    /// The build request to hand to the runtime.
+    /// Digest of everything in the context.
     #[must_use]
-    pub fn build_request(&self) -> ImageBuild {
+    pub fn digest(&self) -> ContextDigest {
+        self.digest
+    }
+
+    /// The reference an image built from this context is tagged with, under `repository`.
+    ///
+    /// The tag carries the architecture and the digest: the architecture because an
+    /// `amd64` machine started from an `arm64` root filesystem cannot execute its own
+    /// userspace, and the digest because an image built from other sources than the
+    /// tool's is not the image the tool asked for, however recently it was built.
+    ///
+    /// # Errors
+    /// Fails when `repository` does not form a reference the runtime accepts.
+    pub fn reference(&self, repository: &str) -> Result<ImageReference, StageError> {
+        Ok(ImageReference::new(format!(
+            "{repository}:{}-{}",
+            self.arch,
+            self.digest.tag()
+        ))?)
+    }
+
+    /// The build request to hand to the runtime, producing `tag`.
+    #[must_use]
+    pub fn build_request(&self, tag: ImageReference) -> ImageBuild {
         ImageBuild {
-            tag: self.tag.clone(),
+            tag,
             context: self.directory.clone(),
             dockerfile: self.directory.join("Dockerfile"),
             arch: self.arch,

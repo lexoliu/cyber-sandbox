@@ -40,7 +40,10 @@ cyber-sandbox claude --resume c0ffee      # or name it
 ```
 
 The first run builds the Kali image with the gateway compiled into it, from the checkout
-you run it in. Every run after that starts in seconds.
+you run it in. Every run after that starts in seconds. The image is named for the digest of
+the sources it was built from, so upgrading cyber-sandbox rebuilds it on the next new
+session and an unchanged one never does; a session keeps the image it was created from,
+and images no session refers to are removed on the way in to the next one.
 
 ## Detonating a sample
 
